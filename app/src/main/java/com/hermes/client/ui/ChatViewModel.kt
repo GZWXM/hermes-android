@@ -94,8 +94,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     val contentBuffer = StringBuilder()
-                    var updateCount = 0
-
                     // capture scope for non-suspend callbacks
                     val scope = this
 
@@ -103,13 +101,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         responseBody = body,
                         onDelta = { delta ->
                             contentBuffer.append(delta)
-                            updateCount++
                             _streamingContent.value = contentBuffer.toString()
-                            if (updateCount % 10 == 0) {
-                                scope.launch {
-                                    dao.update(MessageEntity(id = assistantId, role = "assistant", content = contentBuffer.toString(), timestamp = System.currentTimeMillis()))
-                                }
-                            }
                         },
                         onToolCall = { name ->
                             _toolStatus.value = toolLabel(name)
