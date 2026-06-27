@@ -73,6 +73,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             _isStreaming.value = true
             _streamingContent.value = ""
+            _toolStatus.value = "💭 思考中..."
 
             currentJob = launch(Dispatchers.IO) {
                 try {
@@ -105,12 +106,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                         },
+                        onToolCall = { name ->
+                            _toolStatus.value = toolLabel(name)
+                        },
                         onDone = {
                             scope.launch {
                                 dao.update(MessageEntity(id = assistantId, role = "assistant", content = contentBuffer.toString(), timestamp = System.currentTimeMillis()))
                             }
                             _streamingContent.value = ""
                             _isStreaming.value = false
+                            _toolStatus.value = null
                         },
                         onError = { err ->
                             val finalMsg = if (currentJob?.isCancelled == true) {
@@ -123,6 +128,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             }
                             _streamingContent.value = ""
                             _isStreaming.value = false
+                            _toolStatus.value = null
                         }
                     )
                 } catch (e: Exception) {
@@ -130,6 +136,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     dao.update(MessageEntity(id = assistantId, role = "assistant", content = errorText, timestamp = System.currentTimeMillis()))
                     _streamingContent.value = errorText
                     _isStreaming.value = false
+                    _toolStatus.value = null
                 }
             }
             } finally {
@@ -191,6 +198,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         array.put(userObj)
         return array.toString()
+    }
+
+    private fun toolLabel(name: String): String = when (name) {
+        "web_search" -> "🔍 搜索中..."
+        "web_extract" -> "📄 提取内容..."
+        "terminal" -> "💻 执行命令..."
+        "read_file" -> "📖 读取文件..."
+        "write_file" -> "✏️ 写入文件..."
+        "search_files" -> "🔎 搜索文件..."
+        "delegate_task" -> "🤖 委派任务..."
+        "vision_analyze" -> "👁️ 分析图片..."
+        "memory" -> "🧠 读取记忆..."
+        else -> "⚙️ $name"
     }
 
     override fun onCleared() {

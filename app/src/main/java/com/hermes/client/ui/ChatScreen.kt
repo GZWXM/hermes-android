@@ -41,6 +41,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val streamingContent by vm.streamingContent.collectAsState()
     val isStreaming by vm.isStreaming.collectAsState()
     val isSending by vm.isSending.collectAsState()
+    val toolStatus by vm.toolStatus.collectAsState()
 
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -174,6 +175,24 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 }) {
                     Icon(Icons.Default.Close, contentDescription = "移除")
                 }
+            }
+        }
+
+        // 工具状态
+        toolStatus?.let { status ->
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Text(
+                    text = status,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
             }
         }
 
