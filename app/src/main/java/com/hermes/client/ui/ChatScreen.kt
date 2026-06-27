@@ -123,17 +123,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             items(messages, key = { it.id }) { msg ->
                 MessageBubble(msg)
             }
-            if (isStreaming && streamingContent.isEmpty()) {
-                item(key = "thinking") {
-                    val label = toolStatus ?: "💭 思考中..."
-                    Text(
-                        text = label,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    )
-                }
-            }
+            // "思考中" & tool status now shown in status bar above input area only
             if (streamingContent.isNotEmpty()) {
                 item(key = "streaming") {
                     Surface(
