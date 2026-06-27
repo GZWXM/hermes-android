@@ -113,7 +113,11 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
         )
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+    ) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             state = listState,
