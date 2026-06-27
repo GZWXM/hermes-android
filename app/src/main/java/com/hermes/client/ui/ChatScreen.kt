@@ -40,6 +40,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val messages by vm.messages.collectAsState()
     val streamingContent by vm.streamingContent.collectAsState()
     val isStreaming by vm.isStreaming.collectAsState()
+    val isSending by vm.isSending.collectAsState()
 
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -204,7 +205,8 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                             selectedImageUri = null
                             selectedImageBase64 = null
                         }
-                    }
+                    },
+                    enabled = !isSending
                 ) {
                     Icon(Icons.Default.Send, contentDescription = "发送")
                 }

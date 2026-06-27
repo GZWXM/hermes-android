@@ -49,6 +49,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming
 
+    private val _isSending = MutableStateFlow(false)
+    val isSending: StateFlow<Boolean> = _isSending
+
     private var currentJob: Job? = null
     private var currentResponse: Response? = null
 
@@ -57,7 +60,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         imageBase64: String? = null,
         mimeType: String = "image/jpeg"
     ) {
+        if (_isSending.value) return
+        _isSending.value = true
         viewModelScope.launch {
+            try {
             val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
             dao.insert(MessageEntity(role = "user", content = displayText, imageBase64 = imageBase64, timestamp = System.currentTimeMillis()))
             val assistantId = dao.insert(MessageEntity(role = "assistant", content = "", imageBase64 = null, timestamp = System.currentTimeMillis()))
@@ -122,6 +128,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _streamingContent.value = errorText
                     _isStreaming.value = false
                 }
+            }
+            } finally {
+                _isSending.value = false
             }
         }
     }
