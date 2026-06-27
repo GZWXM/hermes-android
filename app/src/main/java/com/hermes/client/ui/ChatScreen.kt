@@ -74,7 +74,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
 
     LaunchedEffect(messages.size, streamingContent) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size)
+            listState.animateScrollToItem(messages.size - 1)
         }
     }
 
