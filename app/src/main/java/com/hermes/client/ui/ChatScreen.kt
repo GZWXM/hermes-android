@@ -199,8 +199,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(
-                onClick = { imagePicker.launch("image/*") },
-                enabled = !isStreaming
+                onClick = { imagePicker.launch("image/*") }
             ) {
                 Icon(Icons.Default.Add, contentDescription = "添加图片")
             }
@@ -210,8 +209,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 onValueChange = { input = it },
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("输入消息...") },
-                maxLines = 4,
-                enabled = !isStreaming
+                maxLines = 4
             )
 
             Spacer(Modifier.width(4.dp))
@@ -220,20 +218,19 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 IconButton(onClick = { vm.stopGeneration() }) {
                     Icon(Icons.Default.Stop, contentDescription = "停止")
                 }
-            } else {
-                IconButton(
-                    onClick = {
-                        if (input.isNotBlank() || selectedImageBase64 != null) {
-                            vm.sendMessage(input, selectedImageBase64, selectedImageMime)
-                            input = ""
-                            selectedImageUri = null
-                            selectedImageBase64 = null
-                        }
-                    },
-                    enabled = !isSending
-                ) {
-                    Icon(Icons.Default.Send, contentDescription = "发送")
-                }
+            }
+            IconButton(
+                onClick = {
+                    if (input.isNotBlank() || selectedImageBase64 != null) {
+                        vm.sendMessage(input, selectedImageBase64, selectedImageMime)
+                        input = ""
+                        selectedImageUri = null
+                        selectedImageBase64 = null
+                    }
+                },
+                enabled = !isSending
+            ) {
+                Icon(Icons.Default.Send, contentDescription = "发送")
             }
         }
     }
