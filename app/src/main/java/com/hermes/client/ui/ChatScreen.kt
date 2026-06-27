@@ -101,7 +101,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 TextButton(
                     onClick = {
                         if (keyInput.isNotBlank()) {
-                            vm.setApiKey(keyInput.trim())
+                            vm.apiKey = keyInput.trim()
                             showKeyDialog = false
                         }
                     },

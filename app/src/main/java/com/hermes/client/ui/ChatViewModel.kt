@@ -32,14 +32,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val dao: MessageDao = db.messageDao()
 
     private val prefs = application.getSharedPreferences("hermes", Context.MODE_PRIVATE)
-    private var apiKey: String
+    internal var apiKey: String
         get() = prefs.getString("api_key", "") ?: ""
         set(value) { prefs.edit().putString("api_key", value).apply() }
 
     private val client: HermesClient
         get() = HermesClient("http://127.0.0.1:8642", apiKey)
-
-    fun setApiKey(key: String) { apiKey = key }
     fun hasApiKey(): Boolean = apiKey.isNotBlank()
 
     val messages: StateFlow<List<MessageEntity>> = dao.getAll()
