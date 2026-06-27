@@ -1,7 +1,8 @@
 package com.hermes.client.data
 
-import okhttp3.*
-import org.json.JSONArray
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 class HermesClient(private val baseUrl: String, private val apiKey: String) {
@@ -9,30 +10,26 @@ class HermesClient(private val baseUrl: String, private val apiKey: String) {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
         .addInterceptor { chain ->
-            val original = chain.request()
-            val request = original.newBuilder()
+            chain.proceed(chain.request().newBuilder()
                 .header("Authorization", "Bearer $apiKey")
-                .build()
-            chain.proceed(request)
+                .build())
         }
         .build()
 
-    fun chatStream(messagesJson: String): Response {
-        val jsonArray = JSONArray(messagesJson)
-        val requestBody = RequestBody.create(
-            MediaType.parse("application/json"),
-            """
+    fun chatStream(messagesJson: String): okhttp3.Response {
+        val requestBody = """
             {
                 "model": "hermes-agent",
-                "messages": $jsonArray,
+                "messages": $messagesJson,
                 "stream": true
             }
-            """.trimIndent()
-        )
-        val request = Request.Builder()
-            .url("$baseUrl/v1/chat/completions")
-            .post(requestBody)
-            .build()
-        return client.newCall(request).execute()
+        """.trimIndent().toRequestBody("application/json".toMediaType())
+
+        return client.newCall(
+            Request.Builder()
+                .url("$baseUrl/v1/chat/completions")
+                .post(requestBody)
+                .build()
+        ).execute()
     }
 }

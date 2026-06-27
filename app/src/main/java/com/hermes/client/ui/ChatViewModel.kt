@@ -1,6 +1,7 @@
 package com.hermes.client.ui
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
@@ -29,7 +30,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         "hermes.db"
     ).build()
     private val dao: MessageDao = db.messageDao()
-    private val prefs = application.getSharedPreferences("hermes", android.content.Context.MODE_PRIVATE)
+
+    private val prefs = application.getSharedPreferences("hermes", Context.MODE_PRIVATE)
     private var apiKey: String
         get() = prefs.getString("api_key", "") ?: ""
         set(value) { prefs.edit().putString("api_key", value).apply() }
@@ -58,22 +60,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         mimeType: String = "image/jpeg"
     ) {
         viewModelScope.launch {
-            // 1. 插入用户消息
             val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
-            dao.insert(MessageEntity(
-                role = "user",
-                content = displayText,
-                imageBase64 = imageBase64,
-                timestamp = System.currentTimeMillis()
-            ))
-
-            // 2. 插入空 assistant 占位
-            val assistantId = dao.insert(MessageEntity(
-                role = "assistant",
-                content = "",
-                imageBase64 = null,
-                timestamp = System.currentTimeMillis()
-            ))
+            dao.insert(MessageEntity(role = "user", content = displayText, imageBase64 = imageBase64, timestamp = System.currentTimeMillis()))
+            val assistantId = dao.insert(MessageEntity(role = "assistant", content = "", imageBase64 = null, timestamp = System.currentTimeMillis()))
 
             _isStreaming.value = true
             _streamingContent.value = ""
@@ -86,18 +75,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                     if (!response.isSuccessful) {
                         val errorMsg = "HTTP ${response.code}: ${response.body?.string()}"
-                        dao.update(MessageEntity(
-                            id = assistantId,
-                            role = "assistant",
-                            content = "[错误] $errorMsg",
-                            timestamp = System.currentTimeMillis()
-                        ))
+                        dao.update(MessageEntity(id = assistantId, role = "assistant", content = "[错误] $errorMsg", timestamp = System.currentTimeMillis()))
                         _isStreaming.value = false
                         return@launch
                     }
 
                     val contentBuffer = StringBuilder()
                     var updateCount = 0
+
+                    // 捕获 scope，供非 suspend 回调内调用 suspend dao.update
+                    val scope = this
 
                     SseParser.parse(
                         responseBody = response.body!!,
@@ -106,22 +93,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             updateCount++
                             _streamingContent.value = contentBuffer.toString()
                             if (updateCount % 10 == 0) {
-                                dao.update(MessageEntity(
-                                    id = assistantId,
-                                    role = "assistant",
-                                    content = contentBuffer.toString(),
-                                    timestamp = System.currentTimeMillis()
-                                ))
+                                scope.launch {
+                                    dao.update(MessageEntity(id = assistantId, role = "assistant", content = contentBuffer.toString(), timestamp = System.currentTimeMillis()))
+                                }
                             }
                         },
                         onDone = {
-                            val final = contentBuffer.toString()
-                            dao.update(MessageEntity(
-                                id = assistantId,
-                                role = "assistant",
-                                content = final,
-                                timestamp = System.currentTimeMillis()
-                            ))
+                            scope.launch {
+                                dao.update(MessageEntity(id = assistantId, role = "assistant", content = contentBuffer.toString(), timestamp = System.currentTimeMillis()))
+                            }
                             _streamingContent.value = ""
                             _isStreaming.value = false
                         },
@@ -131,24 +111,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             } else {
                                 contentBuffer.toString().ifEmpty { "[错误] $err" }
                             }
-                            dao.update(MessageEntity(
-                                id = assistantId,
-                                role = "assistant",
-                                content = finalMsg,
-                                timestamp = System.currentTimeMillis()
-                            ))
+                            scope.launch {
+                                dao.update(MessageEntity(id = assistantId, role = "assistant", content = finalMsg, timestamp = System.currentTimeMillis()))
+                            }
                             _streamingContent.value = ""
                             _isStreaming.value = false
                         }
                     )
                 } catch (e: Exception) {
                     val errorText = if (currentJob?.isCancelled == true) "[已停止]" else "[错误] ${e.message}"
-                    dao.update(MessageEntity(
-                        id = assistantId,
-                        role = "assistant",
-                        content = errorText,
-                        timestamp = System.currentTimeMillis()
-                    ))
+                    dao.update(MessageEntity(id = assistantId, role = "assistant", content = errorText, timestamp = System.currentTimeMillis()))
                     _streamingContent.value = errorText
                     _isStreaming.value = false
                 }
@@ -168,7 +140,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         currentImageBase64: String?,
         currentMimeType: String
     ): String {
-        // 过滤空内容 → 防止 400 错误 (Gemini 指出的硬伤)
         val history = dao.getAll().first()
             .filter { it.content.isNotBlank() }
             .takeLast(50)
@@ -180,16 +151,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             if (msg.imageBase64 != null) {
                 val contentArray = JSONArray()
                 if (msg.content.isNotBlank() && msg.content != "[图片]") {
-                    contentArray.put(JSONObject().apply {
-                        put("type", "text")
-                        put("text", msg.content)
-                    })
+                    contentArray.put(JSONObject().apply { put("type", "text"); put("text", msg.content) })
                 }
                 contentArray.put(JSONObject().apply {
                     put("type", "image_url")
-                    put("image_url", JSONObject().apply {
-                        put("url", "data:image/jpeg;base64,${msg.imageBase64}")
-                    })
+                    put("image_url", JSONObject().apply { put("url", "data:image/jpeg;base64,${msg.imageBase64}") })
                 })
                 obj.put("content", contentArray)
             } else {
@@ -198,29 +164,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             array.put(obj)
         }
 
-        // 追加当前用户消息
         val userObj = JSONObject()
         userObj.put("role", "user")
         if (currentImageBase64 != null) {
             val contentArray = JSONArray()
             if (currentText.isNotBlank()) {
-                contentArray.put(JSONObject().apply {
-                    put("type", "text")
-                    put("text", currentText)
-                })
+                contentArray.put(JSONObject().apply { put("type", "text"); put("text", currentText) })
             }
             contentArray.put(JSONObject().apply {
                 put("type", "image_url")
-                put("image_url", JSONObject().apply {
-                    put("url", "data:$currentMimeType;base64,$currentImageBase64")
-                })
+                put("image_url", JSONObject().apply { put("url", "data:$currentMimeType;base64,$currentImageBase64") })
             })
             userObj.put("content", contentArray)
         } else {
             userObj.put("content", currentText)
         }
         array.put(userObj)
-
         return array.toString()
     }
 
