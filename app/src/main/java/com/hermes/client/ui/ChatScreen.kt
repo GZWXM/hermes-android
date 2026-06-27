@@ -76,6 +76,39 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
         }
     }
 
+    // 首次启动：填 API Key
+    var showKeyDialog by remember { mutableStateOf(!vm.hasApiKey()) }
+    var keyInput by remember { mutableStateOf("") }
+    if (showKeyDialog) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("配置 API Key") },
+            text = {
+                Column {
+                    Text("请输入 Hermes API Server 的 API_SERVER_KEY")
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = keyInput,
+                        onValueChange = { keyInput = it },
+                        placeholder = { Text("sk-...") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (keyInput.isNotBlank()) {
+                            vm.setApiKey(keyInput.trim())
+                            showKeyDialog = false
+                        }
+                    },
+                    enabled = keyInput.isNotBlank()
+                ) { Text("确定") }
+            }
+        )
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
