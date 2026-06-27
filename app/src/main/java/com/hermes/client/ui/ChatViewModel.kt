@@ -2,6 +2,7 @@ package com.hermes.client.ui
 
 import android.app.Application
 import android.content.Context
+import android.content.res.Configuration
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
@@ -66,14 +67,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (_isSending.value) return
         _isSending.value = true
         viewModelScope.launch {
-            try {
             val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
             dao.insert(MessageEntity(role = "user", content = displayText, imageBase64 = imageBase64, timestamp = System.currentTimeMillis()))
             val assistantId = dao.insert(MessageEntity(role = "assistant", content = "", imageBase64 = null, timestamp = System.currentTimeMillis()))
 
             _isStreaming.value = true
             _streamingContent.value = ""
-            _toolStatus.value = "💭 思考中..."
+            _toolStatus.value = "\uD83D\uDCAD 思考中..."
 
             currentJob = launch(Dispatchers.IO) {
                 try {
@@ -84,18 +84,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (!response.isSuccessful) {
                         val errorMsg = "HTTP ${response.code}: ${response.body?.string()}"
                         dao.update(MessageEntity(id = assistantId, role = "assistant", content = "[错误] $errorMsg", timestamp = System.currentTimeMillis()))
-                        _isStreaming.value = false
+                        return@launch
+                    }
+
+                    val body = response.body
+                    if (body == null) {
+                        dao.update(MessageEntity(id = assistantId, role = "assistant", content = "[错误] 空响应", timestamp = System.currentTimeMillis()))
                         return@launch
                     }
 
                     val contentBuffer = StringBuilder()
                     var updateCount = 0
 
-                    // 捕获 scope，供非 suspend 回调内调用 suspend dao.update
+                    // capture scope for non-suspend callbacks
                     val scope = this
 
                     SseParser.parse(
-                        responseBody = response.body!!,
+                        responseBody = body,
                         onDelta = { delta ->
                             contentBuffer.append(delta)
                             updateCount++
@@ -113,9 +118,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             scope.launch {
                                 dao.update(MessageEntity(id = assistantId, role = "assistant", content = contentBuffer.toString(), timestamp = System.currentTimeMillis()))
                             }
-                            _streamingContent.value = ""
-                            _isStreaming.value = false
-                            _toolStatus.value = null
                         },
                         onError = { err ->
                             val finalMsg = if (currentJob?.isCancelled == true) {
@@ -126,21 +128,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             scope.launch {
                                 dao.update(MessageEntity(id = assistantId, role = "assistant", content = finalMsg, timestamp = System.currentTimeMillis()))
                             }
-                            _streamingContent.value = ""
-                            _isStreaming.value = false
-                            _toolStatus.value = null
                         }
                     )
                 } catch (e: Exception) {
                     val errorText = if (currentJob?.isCancelled == true) "[已停止]" else "[错误] ${e.message}"
                     dao.update(MessageEntity(id = assistantId, role = "assistant", content = errorText, timestamp = System.currentTimeMillis()))
-                    _streamingContent.value = errorText
+                } finally {
+                    _streamingContent.value = ""
                     _isStreaming.value = false
                     _toolStatus.value = null
+                    _isSending.value = false
                 }
-            }
-            } finally {
-                _isSending.value = false
             }
         }
     }
@@ -148,8 +146,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun stopGeneration() {
         currentJob?.cancel()
         currentResponse?.close()
-        _isStreaming.value = false
-        _streamingContent.value = ""
     }
 
     private suspend fun buildHistoryJson(
@@ -201,16 +197,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun toolLabel(name: String): String = when (name) {
-        "web_search" -> "🔍 搜索中..."
-        "web_extract" -> "📄 提取内容..."
-        "terminal" -> "💻 执行命令..."
-        "read_file" -> "📖 读取文件..."
-        "write_file" -> "✏️ 写入文件..."
-        "search_files" -> "🔎 搜索文件..."
-        "delegate_task" -> "🤖 委派任务..."
-        "vision_analyze" -> "👁️ 分析图片..."
-        "memory" -> "🧠 读取记忆..."
-        else -> "⚙️ $name"
+        "web_search" -> "\uD83D\uDD0D 搜索中..."
+        "web_extract" -> "\uD83D\uDCC4 提取内容..."
+        "terminal" -> "\uD83D\uDCBB 执行命令..."
+        "read_file" -> "\uD83D\uDCD6 读取文件..."
+        "write_file" -> "\u270F\uFE0F 写入文件..."
+        "search_files" -> "\uD83D\uDD0E 搜索文件..."
+        "delegate_task" -> "\uD83E\uDD16 委派任务..."
+        "vision_analyze" -> "\uD83D\uDC41\uFE0F 分析图片..."
+        "memory" -> "\uD83E\uDDE0 读取记忆..."
+        else -> "\u2699\uFE0F $name"
     }
 
     override fun onCleared() {

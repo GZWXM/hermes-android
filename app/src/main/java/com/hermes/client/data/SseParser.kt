@@ -24,17 +24,20 @@ object SseParser {
                     // keepalive comment
                     continue
                 }
-                if (line.startsWith("event: ")) {
-                    currentEvent = line.removePrefix("event: ")
-                } else if (line.startsWith("data: ")) {
-                    dataLines.add(line.removePrefix("data: "))
+                val trimmed = line.trimStart()
+                if (trimmed.startsWith("event:")) {
+                    currentEvent = trimmed.removePrefix("event:").trim()
+                    dataLines.clear() // new event, discard orphan data
+                } else if (trimmed.startsWith("data:")) {
+                    // SSE spec allows 0+ spaces after "data:"
+                    dataLines.add(trimmed.removePrefix("data:").trimStart())
                 } else if (line.isEmpty()) {
                     // end of event block
                     if (dataLines.isNotEmpty()) {
                         val eventData = dataLines.joinToString("\n")
                         dataLines.clear()
 
-                        if (eventData == "[DONE]") {
+                        if (eventData.trim() == "[DONE]") {
                             onDone()
                             return
                         }
