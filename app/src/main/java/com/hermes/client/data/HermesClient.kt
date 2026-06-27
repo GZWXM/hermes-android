@@ -3,6 +3,7 @@ package com.hermes.client.data
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 class HermesClient(private val baseUrl: String, private val apiKey: String) {
