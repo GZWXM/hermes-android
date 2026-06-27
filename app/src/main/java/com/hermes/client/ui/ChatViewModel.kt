@@ -64,7 +64,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         imageBase64: String? = null,
         mimeType: String = "image/jpeg"
     ) {
-        if (_isSending.value) return
+        // Cancel any ongoing generation before starting new one
+        stopGeneration()
         _isSending.value = true
         viewModelScope.launch {
             val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
