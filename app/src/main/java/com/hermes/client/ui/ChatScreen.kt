@@ -122,6 +122,16 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             items(messages, key = { it.id }) { msg ->
                 MessageBubble(msg)
             }
+            if (isStreaming && streamingContent.isEmpty()) {
+                item(key = "thinking") {
+                    Text(
+                        text = "💭 思考中...",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                }
+            }
             if (streamingContent.isNotEmpty()) {
                 item(key = "streaming") {
                     Surface(

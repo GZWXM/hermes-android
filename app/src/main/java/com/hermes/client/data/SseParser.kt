@@ -9,10 +9,12 @@ object SseParser {
     fun parse(
         responseBody: ResponseBody,
         onDelta: (String) -> Unit,
+        onToolCall: (String) -> Unit = {},
         onDone: () -> Unit,
         onError: (String) -> Unit
     ) {
         val dataLines = mutableListOf<String>()
+        var currentEvent: String? = null
         val source = responseBody.source()
 
         try {
@@ -22,7 +24,9 @@ object SseParser {
                     // keepalive comment
                     continue
                 }
-                if (line.startsWith("data: ")) {
+                if (line.startsWith("event: ")) {
+                    currentEvent = line.removePrefix("event: ")
+                } else if (line.startsWith("data: ")) {
                     dataLines.add(line.removePrefix("data: "))
                 } else if (line.isEmpty()) {
                     // end of event block
@@ -35,11 +39,25 @@ object SseParser {
                             return
                         }
 
+                        // Tool progress events
+                        if (currentEvent == "hermes.tool.progress") {
+                            try {
+                                val json = JSONObject(eventData)
+                                val name = json.optString("name", "")
+                                if (name.isNotBlank()) {
+                                    onToolCall(name)
+                                }
+                            } catch (_: Exception) {}
+                            currentEvent = null
+                            continue
+                        }
+
                         val content = extractContent(eventData)
                         if (content != null) {
                             onDelta(content)
                         }
                     }
+                    currentEvent = null
                 }
             }
         } catch (e: IOException) {

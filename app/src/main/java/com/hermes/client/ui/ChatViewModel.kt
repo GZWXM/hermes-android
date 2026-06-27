@@ -52,6 +52,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSending = MutableStateFlow(false)
     val isSending: StateFlow<Boolean> = _isSending
 
+    private val _toolStatus = MutableStateFlow<String?>(null)
+    val toolStatus: StateFlow<String?> = _toolStatus
+
     private var currentJob: Job? = null
     private var currentResponse: Response? = null
 
