@@ -24,6 +24,24 @@ android {
         kotlinCompilerExtensionVersion = "1.5.14"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file(System.getenv("KEYSTORE_PATH") ?: "../hermes-release.p12")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
+            keyAlias = System.getenv("KEY_ALIAS") ?: "hermes"
+            keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.getByName("release")
+        }
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
