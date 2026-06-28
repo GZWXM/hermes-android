@@ -30,6 +30,7 @@ android {
             storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
             keyAlias = System.getenv("KEY_ALIAS") ?: "hermes"
             keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+            storeType = "PKCS12"
         }
     }
 
