@@ -28,6 +28,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import coil.compose.AsyncImage
 import com.hermes.client.data.MessageEntity
 import kotlinx.coroutines.Dispatchers
@@ -236,8 +241,11 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(msg: MessageEntity) {
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val isUser = msg.role == "user"
     val hasImage = msg.imageBase64 != null
     val hasText = msg.content.isNotBlank() && msg.content != "[图片]"
@@ -251,7 +259,17 @@ fun MessageBubble(msg: MessageEntity) {
         Surface(
             color = if (isUser) MaterialTheme.colorScheme.primaryContainer
                     else MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(12.dp)
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.combinedClickable(
+                onClick = {},
+                onLongClick = {
+                    val text = msg.content
+                    if (text.isNotBlank() && text != "[图片]") {
+                        clipboardManager.setText(AnnotatedString(text))
+                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
         ) {
             Column(modifier = Modifier.padding(10.dp).widthIn(max = 280.dp)) {
                 if (hasImage) {
