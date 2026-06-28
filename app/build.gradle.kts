@@ -30,7 +30,7 @@ android {
             storePassword = "android"
             keyAlias = "hermes"
             keyPassword = "android"
-            storeType = "PKCS12"
+            storeType = "JKS"
         }
     }
 
