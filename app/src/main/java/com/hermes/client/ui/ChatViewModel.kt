@@ -159,6 +159,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         currentResponse?.close()
     }
 
+    fun clearMessages() {
+        viewModelScope.launch { dao.clearAll() }
+    }
+
+    fun deleteMessage(msg: MessageEntity) {
+        viewModelScope.launch { dao.delete(msg) }
+    }
+
     private suspend fun buildHistoryJson(
         currentText: String,
         currentImageBase64: String?,

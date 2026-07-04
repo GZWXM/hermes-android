@@ -13,10 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.*
@@ -38,11 +35,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.hermes.client.data.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 @Composable
 fun ChatScreen(vm: ChatViewModel = viewModel()) {
@@ -62,28 +61,47 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     var selectedImageBase64 by remember { mutableStateOf<String?>(null) }
     var selectedImageMime by remember { mutableStateOf("image/jpeg") }
 
-    val imagePicker = rememberLauncherForActivityResult(
+    // Camera
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success && cameraUri != null) {
+            selectedImageUri = cameraUri
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val bytes = context.contentResolver.openInputStream(cameraUri!!)?.readBytes()
+                    withContext(Dispatchers.Main) {
+                        selectedImageMime = "image/jpeg"
+                        selectedImageBase64 = bytes?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
+                    }
+                } catch (e: Exception) { e.printStackTrace() }
+            }
+        }
+    }
+
+    // Gallery
+    val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
             selectedImageUri = it
             scope.launch(Dispatchers.IO) {
                 try {
-                    val contentResolver = context.contentResolver
-                    val mime = contentResolver.getType(it) ?: "image/jpeg"
-                    val bytes = contentResolver.openInputStream(it)?.readBytes()
+                    val cr = context.contentResolver
+                    val mime = cr.getType(it) ?: "image/jpeg"
+                    val bytes = cr.openInputStream(it)?.readBytes()
                     withContext(Dispatchers.Main) {
                         selectedImageMime = mime
-                        selectedImageBase64 = bytes?.let { b ->
-                            Base64.encodeToString(b, Base64.NO_WRAP)
-                        }
+                        selectedImageBase64 = bytes?.let { b -> Base64.encodeToString(b, Base64.NO_WRAP) }
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
         }
     }
+
+    // Media picker dropdown
+    var showMediaMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(messages.size, streamingContent) {
         if (messages.isNotEmpty()) {
@@ -91,7 +109,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
         }
     }
 
-    // 首次启动：填 API Key
+    // API Key dialog
     var showKeyDialog by remember { mutableStateOf(!vm.hasApiKey()) }
     var keyInput by remember { mutableStateOf("") }
     if (showKeyDialog) {
@@ -124,19 +142,34 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-    ) {
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+        // Top bar with clear button
+        if (messages.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(
+                    onClick = { vm.clearMessages() },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = "清空", modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("清空记录", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             state = listState,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             items(messages, key = { it.id }) { msg ->
-                MessageBubble(msg)
+                MessageBubble(msg, onDelete = { vm.deleteMessage(msg) })
             }
             if (streamingContent.isNotEmpty()) {
                 item(key = "streaming") {
@@ -155,50 +188,62 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             }
         }
 
-        // 图片预览
+        // Image preview
         selectedImageUri?.let { uri ->
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 AsyncImage(
-                    model = uri,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(60.dp)
-                        .clip(RoundedCornerShape(8.dp)),
+                    model = uri, contentDescription = null,
+                    modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)),
                     contentScale = ContentScale.Crop
                 )
                 Spacer(Modifier.width(8.dp))
                 Text("图片已附加", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = {
-                    selectedImageUri = null
-                    selectedImageBase64 = null
-                }) {
-                    Icon(Icons.Default.Close, contentDescription = "移除")
-                }
+                    selectedImageUri = null; selectedImageBase64 = null
+                }) { Icon(Icons.Default.Close, contentDescription = "移除") }
             }
         }
 
-        // 工具状态
-        toolStatus?.let { status ->
-            ToolStatusBar(status, toolRunning)
-        }
+        // Tool status
+        toolStatus?.let { status -> ToolStatusBar(status, toolRunning) }
 
-        // 输入栏
+        // Input bar
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(
-                onClick = { imagePicker.launch("image/*") }
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "添加图片")
+            // Media picker button
+            Box {
+                IconButton(onClick = { showMediaMenu = true }) {
+                    Icon(Icons.Default.Add, contentDescription = "添加")
+                }
+                DropdownMenu(
+                    expanded = showMediaMenu,
+                    onDismissRequest = { showMediaMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("📷 拍照") },
+                        onClick = {
+                            showMediaMenu = false
+                            val file = File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
+                            file.parentFile?.mkdirs()
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                            cameraUri = uri
+                            cameraLauncher.launch(uri)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("🖼️ 相册") },
+                        onClick = {
+                            showMediaMenu = false
+                            galleryLauncher.launch("image/*")
+                        }
+                    )
+                }
             }
 
             TextField(
@@ -220,15 +265,11 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 onClick = {
                     if (input.isNotBlank() || selectedImageBase64 != null) {
                         vm.sendMessage(input, selectedImageBase64, selectedImageMime)
-                        input = ""
-                        selectedImageUri = null
-                        selectedImageBase64 = null
+                        input = ""; selectedImageUri = null; selectedImageBase64 = null
                     }
                 },
                 enabled = !isSending
-            ) {
-                Icon(Icons.Default.Send, contentDescription = "发送")
-            }
+            ) { Icon(Icons.Default.Send, contentDescription = "发送") }
         }
     }
 }
@@ -236,102 +277,78 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
 @Composable
 fun ToolStatusBar(status: String, isRunning: Boolean) {
     val pulseAlpha by if (isRunning) {
-        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-        infiniteTransition.animateFloat(
-            initialValue = 0.6f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(600, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "alpha"
-        )
-    } else {
-        remember { mutableFloatStateOf(1f) }
-    }
+        val t = rememberInfiniteTransition(label = "pulse")
+        t.animateFloat(0.6f, 1f, infiniteRepeatable(tween(600, easing = LinearEasing), RepeatMode.Reverse), label = "a")
+    } else { remember { mutableFloatStateOf(1f) } }
 
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.secondaryContainer
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             if (isRunning) {
-                // Pulsing dot for running tools
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .alpha(pulseAlpha)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color(0xFF4CAF50))
-                )
+                Box(Modifier.size(8.dp).alpha(pulseAlpha).clip(RoundedCornerShape(4.dp)).background(Color(0xFF4CAF50)))
                 Spacer(Modifier.width(8.dp))
             }
-            Text(
-                text = status,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer
-            )
+            Text(text = status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
         }
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MessageBubble(msg: MessageEntity) {
+fun MessageBubble(msg: MessageEntity, onDelete: () -> Unit = {}) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val isUser = msg.role == "user"
     val hasImage = msg.imageBase64 != null
     val hasText = msg.content.isNotBlank() && msg.content != "[图片]"
+    var showMenu by remember { mutableStateOf(false) }
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
-        Surface(
-            color = if (isUser) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.combinedClickable(
-                onClick = {},
-                onLongClick = {
-                    val text = msg.content
-                    if (text.isNotBlank() && text != "[图片]") {
-                        clipboardManager.setText(AnnotatedString(text))
-                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+        Box {
+            Surface(
+                color = if (isUser) MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.combinedClickable(
+                    onClick = {},
+                    onLongClick = { showMenu = true }
+                )
+            ) {
+                Column(modifier = Modifier.padding(10.dp).widthIn(max = 280.dp)) {
+                    if (hasImage) {
+                        val bmp = rememberBase64Bitmap(msg.imageBase64!!)
+                        bmp?.let {
+                            Image(it.asImageBitmap(), "图片", Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.FillWidth)
+                        }
+                        if (hasText) Spacer(Modifier.height(6.dp))
                     }
+                    if (hasText) Text(msg.content, style = MaterialTheme.typography.bodyMedium)
                 }
-            )
-        ) {
-            Column(modifier = Modifier.padding(10.dp).widthIn(max = 280.dp)) {
-                if (hasImage) {
-                    val bitmap = rememberBase64Bitmap(msg.imageBase64!!)
-                    bitmap?.let { bmp ->
-                        Image(
-                            bitmap = bmp.asImageBitmap(),
-                            contentDescription = "图片",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.FillWidth
-                        )
+            }
+            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("📋 复制") },
+                    onClick = {
+                        showMenu = false
+                        if (hasText) {
+                            clipboardManager.setText(AnnotatedString(msg.content))
+                            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                        }
                     }
-                    if (hasText) Spacer(Modifier.height(6.dp))
-                }
-                if (hasText) {
-                    Text(
-                        text = msg.content,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
+                )
+                DropdownMenuItem(
+                    text = { Text("🗑️ 删除", color = MaterialTheme.colorScheme.error) },
+                    onClick = {
+                        showMenu = false
+                        onDelete()
+                    }
+                )
             }
         }
     }
