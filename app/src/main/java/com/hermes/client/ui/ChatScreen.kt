@@ -61,8 +61,23 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     var selectedImageBase64 by remember { mutableStateOf<String?>(null) }
     var selectedImageMime by remember { mutableStateOf("image/jpeg") }
 
-    // Camera
+    // Camera (with runtime permission)
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    
+    val cameraPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            val file = File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
+            file.parentFile?.mkdirs()
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            cameraUri = uri
+            cameraLauncher.launch(uri)
+        } else {
+            Toast.makeText(context, "需要相机权限", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
@@ -231,11 +246,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                         text = { Text("📷 拍照") },
                         onClick = {
                             showMediaMenu = false
-                            val file = File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
-                            file.parentFile?.mkdirs()
-                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                            cameraUri = uri
-                            cameraLauncher.launch(uri)
+                            cameraPermLauncher.launch(android.Manifest.permission.CAMERA)
                         }
                     )
                     DropdownMenuItem(
