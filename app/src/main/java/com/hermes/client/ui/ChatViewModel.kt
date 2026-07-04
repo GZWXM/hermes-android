@@ -37,11 +37,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     internal var apiKey: String
         get() {
             val raw = prefs.getString("api_key", "") ?: ""
-            // Strip ALL whitespace and non-printable chars
-            return raw.replace(Regex("[\\s\\x00-\\x1f\\x7f]"), "")
+            return raw.replace(Regex("[^a-zA-Z0-9_\\-]"), "")
         }
         set(value) {
-            val clean = value.replace(Regex("[\\s\\x00-\\x1f\\x7f]"), "")
+            val clean = value.replace(Regex("[^a-zA-Z0-9_\\-]"), "")
             prefs.edit().putString("api_key", clean).apply()
         }
 
