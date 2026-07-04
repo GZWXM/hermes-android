@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,8 +23,10 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -31,6 +34,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import coil.compose.AsyncImage
@@ -47,6 +52,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val isStreaming by vm.isStreaming.collectAsState()
     val isSending by vm.isSending.collectAsState()
     val toolStatus by vm.toolStatus.collectAsState()
+    val toolRunning by vm.toolRunning.collectAsState()
 
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -132,7 +138,6 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             items(messages, key = { it.id }) { msg ->
                 MessageBubble(msg)
             }
-            // "思考中" & tool status now shown in status bar above input area only
             if (streamingContent.isNotEmpty()) {
                 item(key = "streaming") {
                     Surface(
@@ -180,20 +185,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
 
         // 工具状态
         toolStatus?.let { status ->
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 2.dp),
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer
-            ) {
-                Text(
-                    text = status,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            }
+            ToolStatusBar(status, toolRunning)
         }
 
         // 输入栏
@@ -237,6 +229,54 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             ) {
                 Icon(Icons.Default.Send, contentDescription = "发送")
             }
+        }
+    }
+}
+
+@Composable
+fun ToolStatusBar(status: String, isRunning: Boolean) {
+    val pulseAlpha by if (isRunning) {
+        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+        infiniteTransition.animateFloat(
+            initialValue = 0.6f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(600, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "alpha"
+        )
+    } else {
+        remember { mutableFloatStateOf(1f) }
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 2.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isRunning) {
+                // Pulsing dot for running tools
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .alpha(pulseAlpha)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFF4CAF50))
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(
+                text = status,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
         }
     }
 }

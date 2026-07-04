@@ -4,12 +4,18 @@ import okhttp3.ResponseBody
 import org.json.JSONObject
 import java.io.IOException
 
+data class ToolProgress(
+    val tool: String,
+    val status: String,  // "running" | "completed"
+    val label: String?,
+)
+
 object SseParser {
 
     fun parse(
         responseBody: ResponseBody,
         onDelta: (String) -> Unit,
-        onToolCall: (String) -> Unit = {},
+        onToolCall: (ToolProgress) -> Unit = {},
         onDone: () -> Unit,
         onError: (String) -> Unit
     ) {
@@ -46,9 +52,11 @@ object SseParser {
                         if (currentEvent == "hermes.tool.progress") {
                             try {
                                 val json = JSONObject(eventData)
-                                val name = json.optString("name", "")
-                                if (name.isNotBlank()) {
-                                    onToolCall(name)
+                                val tool = json.optString("tool", "")
+                                val status = json.optString("status", "running")
+                                val label = json.optString("label", null)
+                                if (tool.isNotBlank()) {
+                                    onToolCall(ToolProgress(tool = tool, status = status, label = label))
                                 }
                             } catch (_: Exception) {}
                             currentEvent = null

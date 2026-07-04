@@ -22,6 +22,7 @@ import com.hermes.client.data.MessageDao
 import com.hermes.client.data.MessageEntity
 import com.hermes.client.data.HermesClient
 import com.hermes.client.data.SseParser
+import com.hermes.client.data.ToolProgress
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -56,6 +57,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _toolStatus = MutableStateFlow<String?>(null)
     val toolStatus: StateFlow<String?> = _toolStatus
 
+    private val _toolRunning = MutableStateFlow(false)
+    val toolRunning: StateFlow<Boolean> = _toolRunning
+
     private var currentJob: Job? = null
     private var currentResponse: Response? = null
 
@@ -74,7 +78,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             _isStreaming.value = true
             _streamingContent.value = ""
-            _toolStatus.value = "\uD83D\uDCAD 思考中..."
+            _toolStatus.value = "💭 思考中..."
+            _toolRunning.value = false
 
             currentJob = launch(Dispatchers.IO) {
                 try {
@@ -95,7 +100,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     val contentBuffer = StringBuilder()
-                    // capture scope for non-suspend callbacks
                     val scope = this
 
                     SseParser.parse(
@@ -104,8 +108,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             contentBuffer.append(delta)
                             _streamingContent.value = contentBuffer.toString()
                         },
-                        onToolCall = { name ->
-                            _toolStatus.value = toolLabel(name)
+                        onToolCall = { progress ->
+                            if (progress.status == "running") {
+                                _toolRunning.value = true
+                                _toolStatus.value = progress.label ?: toolLabel(progress.tool)
+                            } else if (progress.status == "completed") {
+                                _toolRunning.value = false
+                                _toolStatus.value = "✅ ${progress.label ?: toolLabel(progress.tool)}"
+                            }
                         },
                         onDone = {
                             scope.launch {
@@ -129,6 +139,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 } finally {
                     _streamingContent.value = ""
                     _isStreaming.value = false
+                    _toolRunning.value = false
                     _toolStatus.value = null
                     _isSending.value = false
                 }
@@ -190,16 +201,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun toolLabel(name: String): String = when (name) {
-        "web_search" -> "\uD83D\uDD0D 搜索中..."
-        "web_extract" -> "\uD83D\uDCC4 提取内容..."
-        "terminal" -> "\uD83D\uDCBB 执行命令..."
-        "read_file" -> "\uD83D\uDCD6 读取文件..."
-        "write_file" -> "\u270F\uFE0F 写入文件..."
-        "search_files" -> "\uD83D\uDD0E 搜索文件..."
-        "delegate_task" -> "\uD83E\uDD16 委派任务..."
-        "vision_analyze" -> "\uD83D\uDC41\uFE0F 分析图片..."
-        "memory" -> "\uD83E\uDDE0 读取记忆..."
-        else -> "\u2699\uFE0F $name"
+        "web_search" -> "🔍 搜索中..."
+        "web_extract" -> "📄 提取内容..."
+        "terminal" -> "💻 执行命令..."
+        "read_file" -> "📖 读取文件..."
+        "write_file" -> "✏️ 写入文件..."
+        "search_files" -> "🔎 搜索文件..."
+        "delegate_task" -> "🤖 委派任务..."
+        "vision_analyze" -> "👁️ 分析图片..."
+        "memory" -> "🧠 读取记忆..."
+        else -> "⚙️ $name"
     }
 
     override fun onCleared() {
