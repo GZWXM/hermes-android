@@ -35,8 +35,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs = application.getSharedPreferences("hermes", Context.MODE_PRIVATE)
     internal var apiKey: String
-        get() = prefs.getString("api_key", "") ?: ""
-        set(value) { prefs.edit().putString("api_key", value).apply() }
+        get() = (prefs.getString("api_key", "") ?: "").trim()
+        set(value) { prefs.edit().putString("api_key", value.trim()).apply() }
 
     private val client: HermesClient
         get() = HermesClient("http://127.0.0.1:8642", apiKey)

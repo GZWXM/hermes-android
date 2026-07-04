@@ -6,13 +6,14 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-class HermesClient(private val baseUrl: String, private val apiKey: String) {
+class HermesClient(private val baseUrl: String, apiKey: String) {
+    private val safeKey = apiKey.trim()
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(Duration.ofSeconds(15))
         .readTimeout(Duration.ofSeconds(180))
         .addInterceptor { chain ->
             chain.proceed(chain.request().newBuilder()
-                .header("Authorization", "Bearer $apiKey")
+                .header("Authorization", "Bearer $safeKey")
                 .build())
         }
         .build()
