@@ -111,10 +111,10 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
 
     // API Key dialog
     var showKeyDialog by remember { mutableStateOf(!vm.hasApiKey()) }
-    var keyInput by remember { mutableStateOf("") }
+    var keyInput by remember { mutableStateOf(vm.apiKey) }
     if (showKeyDialog) {
         AlertDialog(
-            onDismissRequest = {},
+            onDismissRequest = { if (vm.hasApiKey()) showKeyDialog = false },
             title = { Text("配置 API Key") },
             text = {
                 Column {
@@ -131,8 +131,9 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (keyInput.isNotBlank()) {
-                            vm.apiKey = keyInput.trim()
+                        val clean = keyInput.replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+                        if (clean.isNotBlank()) {
+                            vm.apiKey = clean
                             showKeyDialog = false
                         }
                     },
@@ -143,17 +144,18 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     }
 
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-        // Top bar with clear button
-        if (messages.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.End
-            ) {
+        // Top bar with clear button and settings
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            IconButton(onClick = { showKeyDialog = true; keyInput = vm.apiKey }) {
+                Icon(Icons.Default.Settings, contentDescription = "设置", modifier = Modifier.size(20.dp))
+            }
+            if (messages.isNotEmpty()) {
                 TextButton(
                     onClick = { vm.clearMessages() },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
                     Icon(Icons.Default.Delete, contentDescription = "清空", modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
