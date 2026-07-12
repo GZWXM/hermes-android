@@ -74,7 +74,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
                 dao.insert(MessageEntity(role = "user", content = displayText, imageBase64 = imageBase64, timestamp = System.currentTimeMillis()))
-                val assistantId = dao.insert(MessageEntity(role = "assistant", content = "", imageBase64 = null, timestamp = System.currentTimeMillis()))
 
                 _isStreaming.value = true
                 _streamingContent.value = ""
@@ -89,13 +88,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                         if (!response.isSuccessful) {
                             val errorMsg = "HTTP ${response.code}: ${response.body?.string()}"
-                            dao.update(MessageEntity(id = assistantId, role = "assistant", content = "[错误] $errorMsg", timestamp = System.currentTimeMillis()))
+                            _streamingContent.value = "[错误] $errorMsg"
                             return@launch
                         }
 
                         val body = response.body
                         if (body == null) {
-                            dao.update(MessageEntity(id = assistantId, role = "assistant", content = "[错误] 空响应", timestamp = System.currentTimeMillis()))
+                            _streamingContent.value = "[错误] 空响应"
                             return@launch
                         }
 
@@ -119,7 +118,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             },
                             onDone = {
                                 scope.launch {
-                                    dao.update(MessageEntity(id = assistantId, role = "assistant", content = contentBuffer.toString(), timestamp = System.currentTimeMillis()))
+                                    val finalContent = contentBuffer.toString()
+                                    if (finalContent.isNotBlank()) {
+                                        dao.insert(MessageEntity(role = "assistant", content = finalContent, timestamp = System.currentTimeMillis()))
+                                    }
+                                    _streamingContent.value = ""
                                 }
                             },
                             onError = { err ->
@@ -128,16 +131,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 } else {
                                     contentBuffer.toString().ifEmpty { "[错误] $err" }
                                 }
+                                _streamingContent.value = finalMsg
                                 scope.launch {
-                                    dao.update(MessageEntity(id = assistantId, role = "assistant", content = finalMsg, timestamp = System.currentTimeMillis()))
+                                    if (finalMsg.isNotBlank() && !finalMsg.startsWith("[")) {
+                                        dao.insert(MessageEntity(role = "assistant", content = finalMsg, timestamp = System.currentTimeMillis()))
+                                    }
                                 }
                             }
                         )
                     } catch (e: Exception) {
                         val errorText = if (currentJob?.isCancelled == true) "[已停止]" else "[错误] ${e.message}"
-                        dao.update(MessageEntity(id = assistantId, role = "assistant", content = errorText, timestamp = System.currentTimeMillis()))
+                        _streamingContent.value = errorText
                     } finally {
-                        _streamingContent.value = ""
                         _isStreaming.value = false
                         _toolRunning.value = false
                         _toolStatus.value = null
