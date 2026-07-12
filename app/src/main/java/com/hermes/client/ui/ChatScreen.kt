@@ -89,6 +89,14 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     // In-app camera overlay
     var showCamera by remember { mutableStateOf(false) }
 
+    // Camera runtime permission
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) showCamera = true
+        else Toast.makeText(context, "需要相机权限才能拍照", Toast.LENGTH_SHORT).show()
+    }
+
     // Gallery
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -261,7 +269,13 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                         text = { Text("📷 拍照") },
                         onClick = {
                             showMediaMenu = false
-                            showCamera = true
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                                == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                showCamera = true
+                            } else {
+                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
                         }
                     )
                     DropdownMenuItem(
