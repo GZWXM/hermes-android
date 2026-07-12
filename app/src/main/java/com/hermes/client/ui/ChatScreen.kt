@@ -70,6 +70,19 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     // Track initial load so we jump to bottom instead of animate-scrolling from top
     var initialLoadDone by rememberSaveable { mutableStateOf(false) }
+    // Track if user manually scrolled up — disable auto-scroll while they browse history
+    var userScrolled by remember { mutableStateOf(false) }
+    // Watch scroll position: if user is near bottom, re-enable auto-scroll
+    val isNearBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            if (info.totalItemsCount == 0) true
+            else {
+                val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
+                lastVisible >= info.totalItemsCount - 3
+            }
+        }
+    }
 
     var selectedImageUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var selectedImageBase64 by remember { mutableStateOf<String?>(null) }
@@ -136,13 +149,30 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     var showMediaMenu by remember { mutableStateOf(false) }
 
     // Scroll behavior: jump on first load, animate on new messages
+    // Automatically re-enable scroll when user scrolls back near bottom
+    LaunchedEffect(isNearBottom) {
+        if (isNearBottom) userScrolled = false
+    }
+    // Detect manual scrolling via scroll events
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .collect { scrolling ->
+                if (scrolling) userScrolled = true
+            }
+    }
     LaunchedEffect(messages.size, streamingContent) {
         if (messages.isNotEmpty()) {
             if (!initialLoadDone) {
                 listState.scrollToItem(messages.size - 1)
                 initialLoadDone = true
-            } else {
-                listState.animateScrollToItem(messages.size - 1)
+            } else if (!userScrolled) {
+                // Use scrollToItem (no animation) for streaming tokens
+                // Use animateScrollToItem for completed new messages
+                if (streamingContent.isNotEmpty()) {
+                    listState.scrollToItem(messages.size - 1)
+                } else {
+                    listState.animateScrollToItem(messages.size - 1)
+                }
             }
         }
     }
