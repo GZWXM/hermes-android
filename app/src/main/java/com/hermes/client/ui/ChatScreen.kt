@@ -6,6 +6,9 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
+import android.view.ViewGroup
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
@@ -21,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -211,10 +215,10 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         modifier = Modifier.padding(12.dp)
                     ) {
-                        Text(
+                        MarkdownContent(
                             text = streamingContent,
-                            modifier = Modifier.padding(10.dp),
-                            style = MaterialTheme.typography.bodyMedium
+                            isUser = false,
+                            modifier = Modifier.padding(10.dp)
                         )
                     }
                 }
@@ -333,6 +337,55 @@ fun ToolStatusBar(status: String, isRunning: Boolean) {
     }
 }
 
+@Composable
+fun MarkdownContent(
+    text: String,
+    isUser: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val isDark = isSystemInDarkTheme()
+
+    AndroidView(
+        modifier = modifier.fillMaxWidth(),
+        factory = { ctx ->
+            WebView(ctx).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+                settings.apply {
+                    javaScriptEnabled = true
+                    textZoom = 85
+                    loadWithOverviewMode = true
+                    useWideViewPort = false
+                }
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String?) {
+                        val escaped = text
+                            .replace("\\", "\\\\")
+                            .replace("'", "\\'")
+                            .replace("\n", "\\n")
+                            .replace("\r", "\\r")
+                        view.evaluateJavascript("render('$escaped', $isDark);", null)
+                    }
+                }
+                loadUrl("file:///android_asset/message.html")
+            }
+        },
+        update = { view ->
+            val escaped = text
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+            view.evaluateJavascript("render('$escaped', $isDark);", null)
+        }
+    )
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(msg: MessageEntity, onDelete: () -> Unit = {}) {
@@ -365,7 +418,7 @@ fun MessageBubble(msg: MessageEntity, onDelete: () -> Unit = {}) {
                         }
                         if (hasText) Spacer(Modifier.height(6.dp))
                     }
-                    if (hasText) Text(msg.content, style = MaterialTheme.typography.bodyMedium)
+                    if (hasText) MarkdownContent(text = msg.content, isUser = isUser)
                 }
             }
             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {

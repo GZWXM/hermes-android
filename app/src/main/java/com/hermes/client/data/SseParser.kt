@@ -16,6 +16,7 @@ object SseParser {
         responseBody: ResponseBody,
         onDelta: (String) -> Unit,
         onToolCall: (ToolProgress) -> Unit = {},
+        onReasoning: (String) -> Unit = {},
         onDone: () -> Unit,
         onError: (String) -> Unit
     ) {
@@ -67,6 +68,12 @@ object SseParser {
                         if (content != null) {
                             onDelta(content)
                         }
+
+                        // Also extract reasoning_content if present
+                        val reasoning = extractReasoning(eventData)
+                        if (reasoning != null) {
+                            onReasoning(reasoning)
+                        }
                     }
                     currentEvent = null
                 }
@@ -97,6 +104,18 @@ object SseParser {
             }
             val delta = firstChoice.optJSONObject("delta") ?: return null
             delta.optString("content", null)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun extractReasoning(jsonStr: String): String? {
+        return try {
+            val json = JSONObject(jsonStr)
+            val choices = json.optJSONArray("choices") ?: return null
+            val firstChoice = choices.optJSONObject(0) ?: return null
+            val delta = firstChoice.optJSONObject("delta") ?: return null
+            delta.optString("reasoning_content", null)
         } catch (e: Exception) {
             null
         }
