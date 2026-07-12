@@ -407,6 +407,7 @@ fun MarkdownContent(
                 }
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String?) {
+                        view.setBackgroundColor(0)
                         val escaped = text
                             .replace("\\", "\\\\")
                             .replace("'", "\\'")
@@ -419,6 +420,7 @@ fun MarkdownContent(
             }
         },
         update = { view ->
+            view.setBackgroundColor(0)
             val escaped = text
                 .replace("\\", "\\\\")
                 .replace("'", "\\'")
