@@ -323,19 +323,54 @@ fun CameraCaptureOverlay(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
-    val imageCapture = remember { ImageCapture.Builder()
-        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-        .build()
-    }
-    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-    var cameraReady by remember { mutableStateOf(false) }
-    var flashOn by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val cacheDir = context.cacheDir
 
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var isInitializing by remember { mutableStateOf(true) }
+
+    // CameraX components - created once
+    val imageCapture = remember {
+        ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .build()
+    }
+
+    // Will be set when AndroidView creates the PreviewView
+    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+
+    // Initialize camera when previewView is available
+    LaunchedEffect(previewViewRef) {
+        val pv = previewViewRef ?: return@LaunchedEffect
+        try {
+            val cameraProvider = withContext(Dispatchers.IO) {
+                ProcessCameraProvider.getInstance(context).get()
+            }
+            val preview = Preview.Builder()
+                .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                .build()
+            preview.setSurfaceProvider(pv.surfaceProvider)
+
+            cameraProvider.unbindAll()
+            cameraProvider.bindToLifecycle(
+                lifecycleOwner,
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                imageCapture
+            )
+            isInitializing = false
+        } catch (e: Exception) {
+            e.printStackTrace()
+            errorMsg = "相机启动失败: ${e.message}"
+            isInitializing = false
+        }
+    }
+
+    // Cleanup
     DisposableEffect(Unit) {
         onDispose {
-            cameraExecutor.shutdown()
+            // CameraX auto-unbinds via lifecycle
         }
     }
 
@@ -344,35 +379,40 @@ fun CameraCaptureOverlay(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
-                val previewView = PreviewView(ctx).apply {
+                PreviewView(ctx).apply {
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
                     scaleType = PreviewView.ScaleType.FILL_CENTER
+                    // Signal that the view is ready
+                    post { previewViewRef = this }
                 }
-                cameraProviderFuture.addListener({
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder()
-                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-                        .build()
-                    preview.setSurfaceProvider(previewView.surfaceProvider)
-
-                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
-                    try {
-                        cameraProvider.unbindAll()
-                        cameraProvider.bindToLifecycle(
-                            lifecycleOwner, cameraSelector, preview, imageCapture
-                        )
-                        cameraReady = true
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }, ContextCompat.getMainExecutor(ctx))
-                previewView
+            },
+            update = { pv ->
+                if (previewViewRef == null) {
+                    pv.post { previewViewRef = pv }
+                }
             }
         )
+
+        // Loading / Error overlay
+        if (isInitializing) {
+            CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.Center),
+                color = Color.White
+            )
+        }
+        errorMsg?.let { msg ->
+            Column(
+                modifier = Modifier.align(Alignment.Center).padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(msg, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onClose) { Text("关闭") }
+            }
+        }
 
         // Top close button
         IconButton(
@@ -393,30 +433,30 @@ fun CameraCaptureOverlay(
         ) {
             IconButton(
                 onClick = {
-                    if (!cameraReady) return@IconButton
-                    imageCapture.takePicture(
-                        ContextCompat.getMainExecutor(context),
-                        object : ImageCapture.OnImageCapturedCallback() {
-                            override fun onCaptureSuccess(image: ImageProxy) {
-                                // Convert ImageProxy to JPEG bytes
-                                val buffer = image.planes[0].buffer
-                                val bytes = ByteArray(buffer.remaining())
-                                buffer.get(bytes)
+                    if (errorMsg != null) return@IconButton
 
-                                // For JPEG format, the bytes are ready for NV21/YUV_420_888 we compress
-                                var jpegBytes = bytes
-                                if (image.format == ImageFormat.JPEG) {
-                                    jpegBytes = bytes
-                                } else {
-                                    // Convert YUV_420_888 or NV21 to JPEG
-                                    val yuvImage = YuvImage(bytes, ImageFormat.NV21,
-                                        image.width, image.height, null)
-                                    val out = ByteArrayOutputStream()
-                                    yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 90, out)
-                                    jpegBytes = out.toByteArray()
+                    // Save to temp file — avoids manual YUV conversion
+                    val photoFile = File(cacheDir, "cam_${System.currentTimeMillis()}.jpg")
+                    val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
+
+                    imageCapture.takePicture(
+                        outputOptions,
+                        ContextCompat.getMainExecutor(context),
+                        object : ImageCapture.OnImageSavedCallback {
+                            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        val bytes = photoFile.readBytes()
+                                        photoFile.delete()
+                                        withContext(Dispatchers.Main) {
+                                            onImageCaptured(bytes)
+                                        }
+                                    } catch (e: Exception) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(context, "读取照片失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
                                 }
-                                image.close()
-                                onImageCaptured(jpegBytes)
                             }
 
                             override fun onError(exception: ImageCaptureException) {
@@ -425,15 +465,16 @@ fun CameraCaptureOverlay(
                         }
                     )
                 },
+                enabled = !isInitializing,
                 modifier = Modifier
                     .size(72.dp)
-                    .background(Color.White, CircleShape)
+                    .background(if (isInitializing) Color.Gray else Color.White, CircleShape)
             ) {
                 Box(
                     modifier = Modifier
                         .size(62.dp)
                         .background(Color.Transparent, CircleShape)
-                        .border(3.dp, Color.Black, CircleShape)
+                        .border(3.dp, if (isInitializing) Color.DarkGray else Color.Black, CircleShape)
                 )
             }
         }
