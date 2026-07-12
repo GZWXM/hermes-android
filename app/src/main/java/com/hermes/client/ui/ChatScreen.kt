@@ -58,6 +58,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val context = LocalContext.current
     val messages by vm.messages.collectAsState()
     val streamingContent by vm.streamingContent.collectAsState()
+    val thinkingContent by vm.thinkingContent.collectAsState()
     val isStreaming by vm.isStreaming.collectAsState()
     val isSending by vm.isSending.collectAsState()
     val toolStatus by vm.toolStatus.collectAsState()
@@ -221,6 +222,47 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                             isUser = false,
                             modifier = Modifier.padding(10.dp)
                         )
+                    }
+                }
+            }
+            if (thinkingContent.isNotEmpty()) {
+                item(key = "thinking") {
+                    val expanded = remember { mutableStateOf(true) }
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSystemInDarkTheme()) Color(0xFF1A2744) else Color(0xFFF0F5FF),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "🧠 思维链",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isSystemInDarkTheme()) Color(0xFF8AB4F8) else Color(0xFF1A73E8)
+                                )
+                                TextButton(
+                                    onClick = { expanded.value = !expanded.value },
+                                    contentPadding = PaddingValues(horizontal = 4.dp)
+                                ) {
+                                    Text(
+                                        if (expanded.value) "收起 ▲" else "展开 ▼",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isSystemInDarkTheme()) Color(0xFF8AB4F8) else Color(0xFF1A73E8)
+                                    )
+                                }
+                            }
+                            if (expanded.value) {
+                                Text(
+                                    text = thinkingContent,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             }

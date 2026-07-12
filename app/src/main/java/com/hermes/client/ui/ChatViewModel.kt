@@ -47,6 +47,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _streamingContent = MutableStateFlow("")
     val streamingContent: StateFlow<String> = _streamingContent
 
+    private val _thinkingContent = MutableStateFlow("")
+    val thinkingContent: StateFlow<String> = _thinkingContent
+
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming
 
@@ -77,6 +80,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                 _isStreaming.value = true
                 _streamingContent.value = ""
+                _thinkingContent.value = ""
                 _toolStatus.value = "💭 思考中..."
                 _toolRunning.value = false
 
@@ -106,6 +110,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             onDelta = { delta ->
                                 contentBuffer.append(delta)
                                 _streamingContent.value = contentBuffer.toString()
+                            },
+                            onReasoning = { text ->
+                                _thinkingContent.value = text
                             },
                             onToolCall = { progress ->
                                 if (progress.status == "running") {
@@ -143,6 +150,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val errorText = if (currentJob?.isCancelled == true) "[已停止]" else "[错误] ${e.message}"
                         _streamingContent.value = errorText
                     } finally {
+                        _thinkingContent.value = ""
                         _isStreaming.value = false
                         _toolRunning.value = false
                         _toolStatus.value = null
