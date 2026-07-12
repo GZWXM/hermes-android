@@ -2,10 +2,8 @@ package com.hermes.client.ui
 
 import android.app.Application
 import android.content.Context
-import android.content.res.Configuration
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.room.Room
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +15,7 @@ import kotlinx.coroutines.launch
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
-import com.hermes.client.data.AppDatabase
+import com.hermes.client.data.AppContainer
 import com.hermes.client.data.MessageDao
 import com.hermes.client.data.MessageEntity
 import com.hermes.client.data.HermesClient
@@ -26,12 +24,7 @@ import com.hermes.client.data.ToolProgress
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val db: AppDatabase = Room.databaseBuilder(
-        application,
-        AppDatabase::class.java,
-        "hermes.db"
-    ).build()
-    private val dao: MessageDao = db.messageDao()
+    private val dao: MessageDao = AppContainer.getMessageDao(application)
 
     private val prefs = application.getSharedPreferences("hermes", Context.MODE_PRIVATE)
     internal var apiKey: String
@@ -44,8 +37,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             prefs.edit().putString("api_key", clean).apply()
         }
 
-    private val client: HermesClient
-        get() = HermesClient("http://127.0.0.1:8642", apiKey)
+    // Reuse one HermesClient (and thus one OkHttpClient) for the ViewModel's lifetime
+    private val client: HermesClient by lazy { HermesClient("http://127.0.0.1:8642", apiKey) }
     fun hasApiKey(): Boolean = apiKey.isNotBlank()
 
     val messages: StateFlow<List<MessageEntity>> = dao.getAll()
@@ -78,77 +71,82 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         stopGeneration()
         _isSending.value = true
         viewModelScope.launch {
-            val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
-            dao.insert(MessageEntity(role = "user", content = displayText, imageBase64 = imageBase64, timestamp = System.currentTimeMillis()))
-            val assistantId = dao.insert(MessageEntity(role = "assistant", content = "", imageBase64 = null, timestamp = System.currentTimeMillis()))
+            try {
+                val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
+                dao.insert(MessageEntity(role = "user", content = displayText, imageBase64 = imageBase64, timestamp = System.currentTimeMillis()))
+                val assistantId = dao.insert(MessageEntity(role = "assistant", content = "", imageBase64 = null, timestamp = System.currentTimeMillis()))
 
-            _isStreaming.value = true
-            _streamingContent.value = ""
-            _toolStatus.value = "💭 思考中..."
-            _toolRunning.value = false
+                _isStreaming.value = true
+                _streamingContent.value = ""
+                _toolStatus.value = "💭 思考中..."
+                _toolRunning.value = false
 
-            currentJob = launch(Dispatchers.IO) {
-                try {
-                    val historyJson = buildHistoryJson(text, imageBase64, mimeType)
-                    val response = client.chatStream(historyJson)
-                    currentResponse = response
+                currentJob = launch(Dispatchers.IO) {
+                    try {
+                        val historyJson = buildHistoryJson(text, imageBase64, mimeType)
+                        val response = client.chatStream(historyJson)
+                        currentResponse = response
 
-                    if (!response.isSuccessful) {
-                        val errorMsg = "HTTP ${response.code}: ${response.body?.string()}"
-                        dao.update(MessageEntity(id = assistantId, role = "assistant", content = "[错误] $errorMsg", timestamp = System.currentTimeMillis()))
-                        return@launch
-                    }
-
-                    val body = response.body
-                    if (body == null) {
-                        dao.update(MessageEntity(id = assistantId, role = "assistant", content = "[错误] 空响应", timestamp = System.currentTimeMillis()))
-                        return@launch
-                    }
-
-                    val contentBuffer = StringBuilder()
-                    val scope = this
-
-                    SseParser.parse(
-                        responseBody = body,
-                        onDelta = { delta ->
-                            contentBuffer.append(delta)
-                            _streamingContent.value = contentBuffer.toString()
-                        },
-                        onToolCall = { progress ->
-                            if (progress.status == "running") {
-                                _toolRunning.value = true
-                                _toolStatus.value = progress.label ?: toolLabel(progress.tool)
-                            } else if (progress.status == "completed") {
-                                _toolRunning.value = false
-                                _toolStatus.value = "✅ ${progress.label ?: toolLabel(progress.tool)}"
-                            }
-                        },
-                        onDone = {
-                            scope.launch {
-                                dao.update(MessageEntity(id = assistantId, role = "assistant", content = contentBuffer.toString(), timestamp = System.currentTimeMillis()))
-                            }
-                        },
-                        onError = { err ->
-                            val finalMsg = if (currentJob?.isCancelled == true) {
-                                contentBuffer.toString().ifEmpty { "[已停止]" }
-                            } else {
-                                contentBuffer.toString().ifEmpty { "[错误] $err" }
-                            }
-                            scope.launch {
-                                dao.update(MessageEntity(id = assistantId, role = "assistant", content = finalMsg, timestamp = System.currentTimeMillis()))
-                            }
+                        if (!response.isSuccessful) {
+                            val errorMsg = "HTTP ${response.code}: ${response.body?.string()}"
+                            dao.update(MessageEntity(id = assistantId, role = "assistant", content = "[错误] $errorMsg", timestamp = System.currentTimeMillis()))
+                            return@launch
                         }
-                    )
-                } catch (e: Exception) {
-                    val errorText = if (currentJob?.isCancelled == true) "[已停止]" else "[错误] ${e.message}"
-                    dao.update(MessageEntity(id = assistantId, role = "assistant", content = errorText, timestamp = System.currentTimeMillis()))
-                } finally {
-                    _streamingContent.value = ""
-                    _isStreaming.value = false
-                    _toolRunning.value = false
-                    _toolStatus.value = null
-                    _isSending.value = false
+
+                        val body = response.body
+                        if (body == null) {
+                            dao.update(MessageEntity(id = assistantId, role = "assistant", content = "[错误] 空响应", timestamp = System.currentTimeMillis()))
+                            return@launch
+                        }
+
+                        val contentBuffer = StringBuilder()
+                        val scope = this
+
+                        SseParser.parse(
+                            responseBody = body,
+                            onDelta = { delta ->
+                                contentBuffer.append(delta)
+                                _streamingContent.value = contentBuffer.toString()
+                            },
+                            onToolCall = { progress ->
+                                if (progress.status == "running") {
+                                    _toolRunning.value = true
+                                    _toolStatus.value = progress.label ?: toolLabel(progress.tool)
+                                } else if (progress.status == "completed") {
+                                    _toolRunning.value = false
+                                    _toolStatus.value = "✅ ${progress.label ?: toolLabel(progress.tool)}"
+                                }
+                            },
+                            onDone = {
+                                scope.launch {
+                                    dao.update(MessageEntity(id = assistantId, role = "assistant", content = contentBuffer.toString(), timestamp = System.currentTimeMillis()))
+                                }
+                            },
+                            onError = { err ->
+                                val finalMsg = if (currentJob?.isCancelled == true) {
+                                    contentBuffer.toString().ifEmpty { "[已停止]" }
+                                } else {
+                                    contentBuffer.toString().ifEmpty { "[错误] $err" }
+                                }
+                                scope.launch {
+                                    dao.update(MessageEntity(id = assistantId, role = "assistant", content = finalMsg, timestamp = System.currentTimeMillis()))
+                                }
+                            }
+                        )
+                    } catch (e: Exception) {
+                        val errorText = if (currentJob?.isCancelled == true) "[已停止]" else "[错误] ${e.message}"
+                        dao.update(MessageEntity(id = assistantId, role = "assistant", content = errorText, timestamp = System.currentTimeMillis()))
+                    }
                 }
+            } catch (e: Exception) {
+                // Catch any setup error (e.g. DAO insert) to prevent stuck flags
+                e.printStackTrace()
+            } finally {
+                _streamingContent.value = ""
+                _isStreaming.value = false
+                _toolRunning.value = false
+                _toolStatus.value = null
+                _isSending.value = false
             }
         }
     }
@@ -231,6 +229,5 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         currentJob?.cancel()
         currentResponse?.close()
-        db.close()
     }
 }
