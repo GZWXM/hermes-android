@@ -1,16 +1,33 @@
 package com.hermes.client.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.graphics.Matrix
+import android.graphics.Rect
+import android.graphics.YuvImage
 import android.net.Uri
 import android.util.Base64
+import android.view.ViewGroup
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.AspectRatio
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -26,22 +43,29 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.core.content.FileProvider
+import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.hermes.client.data.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.ByteBuffer
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 @Composable
 fun ChatScreen(vm: ChatViewModel = viewModel()) {
@@ -56,44 +80,15 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // Track initial load so we jump to bottom instead of animate-scrolling from top
+    var initialLoadDone by rememberSaveable { mutableStateOf(false) }
 
     var selectedImageUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var selectedImageBase64 by remember { mutableStateOf<String?>(null) }
     var selectedImageMime by remember { mutableStateOf("image/jpeg") }
 
-    // Camera (with runtime permission)
-    var cameraUri by remember { mutableStateOf<Uri?>(null) }
-    
-    val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture()
-    ) { success ->
-        if (success && cameraUri != null) {
-            selectedImageUri = cameraUri
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val bytes = context.contentResolver.openInputStream(cameraUri!!)?.readBytes()
-                    withContext(Dispatchers.Main) {
-                        selectedImageMime = "image/jpeg"
-                        selectedImageBase64 = bytes?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
-                    }
-                } catch (e: Exception) { e.printStackTrace() }
-            }
-        }
-    }
-    
-    val cameraPermLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            val file = File(context.cacheDir, "photo_${System.currentTimeMillis()}.jpg")
-            file.parentFile?.mkdirs()
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-            cameraUri = uri
-            cameraLauncher.launch(uri)
-        } else {
-            Toast.makeText(context, "需要相机权限", Toast.LENGTH_SHORT).show()
-        }
-    }
+    // In-app camera overlay
+    var showCamera by remember { mutableStateOf(false) }
 
     // Gallery
     val galleryLauncher = rememberLauncherForActivityResult(
@@ -118,9 +113,15 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     // Media picker dropdown
     var showMediaMenu by remember { mutableStateOf(false) }
 
+    // Scroll behavior: jump on first load, animate on new messages
     LaunchedEffect(messages.size, streamingContent) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+            if (!initialLoadDone) {
+                listState.scrollToItem(messages.size - 1)
+                initialLoadDone = true
+            } else {
+                listState.animateScrollToItem(messages.size - 1)
+            }
         }
     }
 
@@ -155,6 +156,21 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                     enabled = keyInput.isNotBlank()
                 ) { Text("确定") }
             }
+        )
+    }
+
+    // CameraX overlay
+    if (showCamera) {
+        CameraCaptureOverlay(
+            onImageCaptured = { bytes ->
+                scope.launch {
+                    selectedImageMime = "image/jpeg"
+                    selectedImageBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    selectedImageUri = null // CameraX doesn't produce a URI
+                }
+                showCamera = false
+            },
+            onClose = { showCamera = false }
         )
     }
 
@@ -246,7 +262,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                         text = { Text("📷 拍照") },
                         onClick = {
                             showMediaMenu = false
-                            cameraPermLauncher.launch(android.Manifest.permission.CAMERA)
+                            showCamera = true
                         }
                     )
                     DropdownMenuItem(
@@ -283,6 +299,130 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 },
                 enabled = !isSending
             ) { Icon(Icons.Default.Send, contentDescription = "发送") }
+        }
+    }
+}
+
+@Composable
+fun CameraCaptureOverlay(
+    onImageCaptured: (ByteArray) -> Unit,
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
+    val imageCapture = remember { ImageCapture.Builder()
+        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+        .build()
+    }
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    var cameraReady by remember { mutableStateOf(false) }
+    var flashOn by remember { mutableStateOf(false) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            cameraExecutor.shutdown()
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // Camera preview
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                val previewView = PreviewView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                }
+                cameraProviderFuture.addListener({
+                    val cameraProvider = cameraProviderFuture.get()
+                    val preview = Preview.Builder()
+                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                        .build()
+                    preview.setSurfaceProvider(previewView.surfaceProvider)
+
+                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+                    try {
+                        cameraProvider.unbindAll()
+                        cameraProvider.bindToLifecycle(
+                            lifecycleOwner, cameraSelector, preview, imageCapture
+                        )
+                        cameraReady = true
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }, ContextCompat.getMainExecutor(ctx))
+                previewView
+            }
+        )
+
+        // Top close button
+        IconButton(
+            onClick = onClose,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(16.dp)
+                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+        ) {
+            Icon(Icons.Default.Close, "关闭", tint = Color.White)
+        }
+
+        // Bottom capture button
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 48.dp)
+        ) {
+            IconButton(
+                onClick = {
+                    if (!cameraReady) return@IconButton
+                    imageCapture.takePicture(
+                        ContextCompat.getMainExecutor(context),
+                        object : ImageCapture.OnImageCapturedCallback() {
+                            override fun onCaptureSuccess(image: ImageProxy) {
+                                // Convert ImageProxy to JPEG bytes
+                                val buffer = image.planes[0].buffer
+                                val bytes = ByteArray(buffer.remaining())
+                                buffer.get(bytes)
+
+                                // For JPEG format, the bytes are ready for NV21/YUV_420_888 we compress
+                                var jpegBytes = bytes
+                                if (image.format == ImageFormat.JPEG) {
+                                    jpegBytes = bytes
+                                } else {
+                                    // Convert YUV_420_888 or NV21 to JPEG
+                                    val yuvImage = YuvImage(bytes, ImageFormat.NV21,
+                                        image.width, image.height, null)
+                                    val out = ByteArrayOutputStream()
+                                    yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 90, out)
+                                    jpegBytes = out.toByteArray()
+                                }
+                                image.close()
+                                onImageCaptured(jpegBytes)
+                            }
+
+                            override fun onError(exception: ImageCaptureException) {
+                                Toast.makeText(context, "拍照失败: ${exception.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                },
+                modifier = Modifier
+                    .size(72.dp)
+                    .background(Color.White, CircleShape)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(62.dp)
+                        .background(Color.Transparent, CircleShape)
+                        .border(3.dp, Color.Black, CircleShape)
+                )
+            }
         }
     }
 }
