@@ -13,11 +13,18 @@ object AppContainer {
                 context.applicationContext,
                 AppDatabase::class.java,
                 "hermes.db"
-            ).build().also { db = it }
+            ).fallbackToDestructiveMigration().build().also { db = it }
         }
     }
 
     fun getMessageDao(context: Context): MessageDao {
         return getDatabase(context).messageDao()
+    }
+
+    fun getChatRepository(context: Context, baseUrl: String, apiKey: String): ChatRepository {
+        return ChatRepository(
+            messageDao = getMessageDao(context),
+            hermesClient = HermesClient(baseUrl, apiKey)
+        )
     }
 }

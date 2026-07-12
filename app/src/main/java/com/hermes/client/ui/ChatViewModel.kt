@@ -9,22 +9,18 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import com.hermes.client.data.AppContainer
-import com.hermes.client.data.MessageDao
+import com.hermes.client.data.ChatError
+import com.hermes.client.data.ChatRepository
 import com.hermes.client.data.MessageEntity
-import com.hermes.client.data.HermesClient
 import com.hermes.client.data.SseParser
-import com.hermes.client.data.ToolProgress
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val dao: MessageDao = AppContainer.getMessageDao(application)
 
     private val prefs = application.getSharedPreferences("hermes", Context.MODE_PRIVATE)
     internal var apiKey: String
@@ -37,11 +33,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             prefs.edit().putString("api_key", clean).apply()
         }
 
-    // Reuse one HermesClient (and thus one OkHttpClient) for the ViewModel's lifetime
-    private val client: HermesClient by lazy { HermesClient("http://127.0.0.1:8642", apiKey) }
+    private val repository: ChatRepository by lazy {
+        AppContainer.getChatRepository(application, "http://127.0.0.1:8642", apiKey)
+    }
+
     fun hasApiKey(): Boolean = apiKey.isNotBlank()
 
-    val messages: StateFlow<List<MessageEntity>> = dao.getAll()
+    val messages: StateFlow<List<MessageEntity>> = repository.allMessages
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _streamingContent = MutableStateFlow("")
@@ -62,6 +60,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _toolRunning = MutableStateFlow(false)
     val toolRunning: StateFlow<Boolean> = _toolRunning
 
+    private val _error = MutableStateFlow<ChatError?>(null)
+    val error: StateFlow<ChatError?> = _error
+
     private var currentJob: Job? = null
     private var currentResponse: Response? = null
 
@@ -70,13 +71,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         imageBase64: String? = null,
         mimeType: String = "image/jpeg"
     ) {
-        // Cancel any ongoing generation before starting new one
         stopGeneration()
+
+        if (!hasApiKey()) {
+            _error.value = ChatError.Unauthorized
+            return
+        }
+
         _isSending.value = true
         viewModelScope.launch {
             try {
                 val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
-                dao.insert(MessageEntity(role = "user", content = displayText, imageBase64 = imageBase64, timestamp = System.currentTimeMillis()))
+                repository.saveMessage(MessageEntity(role = "user", content = displayText, imageBase64 = imageBase64, timestamp = System.currentTimeMillis()))
 
                 _isStreaming.value = true
                 _streamingContent.value = ""
@@ -87,18 +93,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 currentJob = launch(Dispatchers.IO) {
                     try {
                         val historyJson = buildHistoryJson(text, imageBase64, mimeType)
-                        val response = client.chatStream(historyJson)
+                        val response = repository.streamChat(historyJson)
                         currentResponse = response
 
                         if (!response.isSuccessful) {
-                            val errorMsg = "HTTP ${response.code}: ${response.body?.string()}"
-                            _streamingContent.value = "[错误] $errorMsg"
+                            val errorMsg = response.body?.string() ?: "未知错误"
+                            when (response.code) {
+                                401 -> _error.value = ChatError.Unauthorized
+                                in 500..599 -> _error.value = ChatError.Server(response.code, errorMsg)
+                                else -> _error.value = ChatError.Network("HTTP ${response.code}", errorMsg)
+                            }
                             return@launch
                         }
 
                         val body = response.body
                         if (body == null) {
-                            _streamingContent.value = "[错误] 空响应"
+                            _error.value = ChatError.Network("服务器返回了空响应")
                             return@launch
                         }
 
@@ -127,28 +137,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 scope.launch {
                                     val finalContent = contentBuffer.toString()
                                     if (finalContent.isNotBlank()) {
-                                        dao.insert(MessageEntity(role = "assistant", content = finalContent, timestamp = System.currentTimeMillis()))
+                                        repository.saveMessage(MessageEntity(role = "assistant", content = finalContent, timestamp = System.currentTimeMillis()))
                                     }
                                     _streamingContent.value = ""
                                 }
                             },
                             onError = { err ->
-                                val finalMsg = if (currentJob?.isCancelled == true) {
-                                    contentBuffer.toString().ifEmpty { "[已停止]" }
-                                } else {
-                                    contentBuffer.toString().ifEmpty { "[错误] $err" }
+                                val isCancelled = currentJob?.isCancelled == true
+                                val finalMsg = contentBuffer.toString().ifEmpty {
+                                    if (isCancelled) "[已停止]" else "[错误] $err"
                                 }
                                 _streamingContent.value = finalMsg
+                                if (isCancelled) {
+                                    _error.value = ChatError.Cancelled
+                                } else {
+                                    _error.value = ChatError.Network(err)
+                                }
                                 scope.launch {
                                     if (finalMsg.isNotBlank() && !finalMsg.startsWith("[")) {
-                                        dao.insert(MessageEntity(role = "assistant", content = finalMsg, timestamp = System.currentTimeMillis()))
+                                        repository.saveMessage(MessageEntity(role = "assistant", content = finalMsg, timestamp = System.currentTimeMillis()))
                                     }
                                 }
                             }
                         )
                     } catch (e: Exception) {
-                        val errorText = if (currentJob?.isCancelled == true) "[已停止]" else "[错误] ${e.message}"
-                        _streamingContent.value = errorText
+                        if (currentJob?.isCancelled != true) {
+                            val errorText = "[错误] ${e.message}"
+                            _streamingContent.value = errorText
+                            _error.value = ChatError.Network(e.message ?: "未知错误")
+                        }
                     } finally {
                         _thinkingContent.value = ""
                         _isStreaming.value = false
@@ -158,12 +175,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } catch (e: Exception) {
-                // Setup error before inner job started — reset flags manually
                 _streamingContent.value = ""
                 _isStreaming.value = false
                 _toolRunning.value = false
                 _toolStatus.value = null
                 _isSending.value = false
+                _error.value = ChatError.Unknown(e.message ?: "未知错误")
                 e.printStackTrace()
             }
         }
@@ -175,11 +192,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearMessages() {
-        viewModelScope.launch { dao.clearAll() }
+        viewModelScope.launch { repository.clearAllMessages() }
     }
 
     fun deleteMessage(msg: MessageEntity) {
-        viewModelScope.launch { dao.delete(msg) }
+        viewModelScope.launch { repository.deleteMessage(msg) }
+    }
+
+    fun clearError() {
+        _error.value = null
     }
 
     private suspend fun buildHistoryJson(
@@ -187,46 +208,56 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         currentImageBase64: String?,
         currentMimeType: String
     ): String {
-        val history = dao.getAll().first()
-            .filter { it.content.isNotBlank() }
-            .takeLast(50)
-
+        val messages = repository.allMessages
         val array = JSONArray()
-        for (msg in history) {
+        for (msg in messages) {
+            if (msg.content.isBlank() && msg.imageBase64 == null) continue
+            if (msg.content.startsWith("[错误]") || msg.content.startsWith("[已停止]")) continue
+            if (msg.content.startsWith("[")) continue
             val obj = JSONObject()
             obj.put("role", msg.role)
             if (msg.imageBase64 != null) {
-                val contentArray = JSONArray()
-                if (msg.content.isNotBlank() && msg.content != "[图片]") {
-                    contentArray.put(JSONObject().apply { put("type", "text"); put("text", msg.content) })
-                }
-                contentArray.put(JSONObject().apply {
+                val content = JSONArray()
+                content.put(JSONObject().apply {
                     put("type", "image_url")
-                    put("image_url", JSONObject().apply { put("url", "data:image/jpeg;base64,${msg.imageBase64}") })
+                    put("image_url", JSONObject().apply {
+                        put("url", "data:$mimeType;base64,${msg.imageBase64}")
+                    })
                 })
-                obj.put("content", contentArray)
+                if (msg.content.isNotBlank()) {
+                    content.put(JSONObject().apply {
+                        put("type", "text")
+                        put("text", msg.content)
+                    })
+                }
+                obj.put("content", content)
             } else {
                 obj.put("content", msg.content)
             }
             array.put(obj)
         }
-
-        val userObj = JSONObject()
-        userObj.put("role", "user")
+        // Append current user message
+        val cur = JSONObject()
+        cur.put("role", "user")
         if (currentImageBase64 != null) {
-            val contentArray = JSONArray()
-            if (currentText.isNotBlank()) {
-                contentArray.put(JSONObject().apply { put("type", "text"); put("text", currentText) })
-            }
-            contentArray.put(JSONObject().apply {
+            val content = JSONArray()
+            content.put(JSONObject().apply {
                 put("type", "image_url")
-                put("image_url", JSONObject().apply { put("url", "data:$currentMimeType;base64,$currentImageBase64") })
+                put("image_url", JSONObject().apply {
+                    put("url", "data:$currentMimeType;base64,$currentImageBase64")
+                })
             })
-            userObj.put("content", contentArray)
+            if (currentText.isNotBlank()) {
+                content.put(JSONObject().apply {
+                    put("type", "text")
+                    put("text", currentText)
+                })
+            }
+            cur.put("content", content)
         } else {
-            userObj.put("content", currentText)
+            cur.put("content", currentText)
         }
-        array.put(userObj)
+        array.put(cur)
         return array.toString()
     }
 
@@ -234,12 +265,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         "web_search" -> "🔍 搜索中..."
         "web_extract" -> "📄 提取内容..."
         "terminal" -> "💻 执行命令..."
-        "read_file" -> "📖 读取文件..."
-        "write_file" -> "✏️ 写入文件..."
-        "search_files" -> "🔎 搜索文件..."
-        "delegate_task" -> "🤖 委派任务..."
+        "web_extract_v2" -> "📄 提取内容..."
         "vision_analyze" -> "👁️ 分析图片..."
-        "memory" -> "🧠 读取记忆..."
+        "read_file" -> "📖 读取文件..."
         else -> "⚙️ $name"
     }
 

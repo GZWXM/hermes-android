@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import coil.compose.AsyncImage
+import com.hermes.client.data.ChatError
 import com.hermes.client.data.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -180,181 +181,207 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
         )
     }
 
-    Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-        // Top bar with clear button and settings
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            IconButton(onClick = { showKeyDialog = true; keyInput = vm.apiKey }) {
-                Icon(Icons.Default.Settings, contentDescription = "设置", modifier = Modifier.size(20.dp))
-            }
-            if (messages.isNotEmpty()) {
-                TextButton(
-                    onClick = { vm.clearMessages() },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Icon(Icons.Default.Delete, contentDescription = "清空", modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("清空记录", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
+    val snackbarHostState = remember { SnackbarHostState() }
 
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            state = listState,
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            items(messages, key = { it.id }) { msg ->
-                MessageBubble(msg, onDelete = { vm.deleteMessage(msg) })
+    LaunchedEffect(vm.error) {
+        vm.error?.let { error ->
+            val msg = when (error) {
+                is ChatError.Network -> "网络错误: ${error.message}"
+                is ChatError.Unauthorized -> "请先配置 API Key"
+                is ChatError.Server -> "服务器错误 (${error.code}): ${error.message}"
+                is ChatError.Cancelled -> null
+                is ChatError.Unknown -> "未知错误: ${error.message}"
             }
-            if (streamingContent.isNotEmpty()) {
-                item(key = "streaming") {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.padding(12.dp)
+            if (msg != null) {
+                snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Short)
+            }
+            vm.clearError()
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+            // Top bar with clear button and settings
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                IconButton(onClick = { showKeyDialog = true; keyInput = vm.apiKey }) {
+                    Icon(Icons.Default.Settings, contentDescription = "设置", modifier = Modifier.size(20.dp))
+                }
+                if (messages.isNotEmpty()) {
+                    TextButton(
+                        onClick = { vm.clearMessages() },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                     ) {
-                        MarkdownContent(
-                            text = streamingContent,
-                            isUser = false,
-                            modifier = Modifier.padding(10.dp)
-                        )
+                        Icon(Icons.Default.Delete, contentDescription = "清空", modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("清空记录", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
-            if (thinkingContent.isNotEmpty()) {
-                item(key = "thinking") {
-                    val expanded = remember { mutableStateOf(true) }
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isSystemInDarkTheme()) Color(0xFF1A2744) else Color(0xFFF0F5FF),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    "🧠 思维链",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isSystemInDarkTheme()) Color(0xFF8AB4F8) else Color(0xFF1A73E8)
-                                )
-                                TextButton(
-                                    onClick = { expanded.value = !expanded.value },
-                                    contentPadding = PaddingValues(horizontal = 4.dp)
+
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                state = listState,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(messages, key = { it.id }) { msg ->
+                    MessageBubble(msg, onDelete = { vm.deleteMessage(msg) })
+                }
+                if (streamingContent.isNotEmpty()) {
+                    item(key = "streaming") {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.padding(12.dp)
+                        ) {
+                            MarkdownContent(
+                                text = streamingContent,
+                                isUser = false,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+                }
+                if (thinkingContent.isNotEmpty()) {
+                    item(key = "thinking") {
+                        val expanded = remember { mutableStateOf(true) }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSystemInDarkTheme()) Color(0xFF1A2744) else Color(0xFFF0F5FF),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        if (expanded.value) "收起 ▲" else "展开 ▼",
+                                        "🧠 思维链",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = if (isSystemInDarkTheme()) Color(0xFF8AB4F8) else Color(0xFF1A73E8)
                                     )
+                                    TextButton(
+                                        onClick = { expanded.value = !expanded.value },
+                                        contentPadding = PaddingValues(horizontal = 4.dp)
+                                    ) {
+                                        Text(
+                                            if (expanded.value) "收起 ▲" else "展开 ▼",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isSystemInDarkTheme()) Color(0xFF8AB4F8) else Color(0xFF1A73E8)
+                                        )
+                                    }
+                                }
+                                if (expanded.value) {
+                                    Text(
+                                        text = thinkingContent,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
-                            if (expanded.value) {
-                                Text(
-                                    text = thinkingContent,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
                         }
                     }
                 }
             }
-        }
 
-        // Image preview
-        selectedImageUri?.let { uri ->
+            // Image preview
+            selectedImageUri?.let { uri ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AsyncImage(
+                        model = uri, contentDescription = null,
+                        modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("图片已附加", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = {
+                        selectedImageUri = null; selectedImageBase64 = null
+                    }) { Icon(Icons.Default.Close, contentDescription = "移除") }
+                }
+            }
+
+            // Tool status
+            toolStatus?.let { status -> ToolStatusBar(status, toolRunning) }
+
+            // Input bar
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AsyncImage(
-                    model = uri, contentDescription = null,
-                    modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)),
-                    contentScale = ContentScale.Crop
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("图片已附加", style = MaterialTheme.typography.bodySmall)
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = {
-                    selectedImageUri = null; selectedImageBase64 = null
-                }) { Icon(Icons.Default.Close, contentDescription = "移除") }
-            }
-        }
-
-        // Tool status
-        toolStatus?.let { status -> ToolStatusBar(status, toolRunning) }
-
-        // Input bar
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Media picker button
-            Box {
-                IconButton(onClick = { showMediaMenu = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "添加")
-                }
-                DropdownMenu(
-                    expanded = showMediaMenu,
-                    onDismissRequest = { showMediaMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("📷 拍照") },
-                        onClick = {
-                            showMediaMenu = false
-                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
-                                == PackageManager.PERMISSION_GRANTED
-                            ) {
-                                val photoFile = File(context.cacheDir, "cam_${System.currentTimeMillis()}.jpg")
-                                cameraPhotoUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
-                                cameraLauncher.launch(cameraPhotoUri!!)
-                            } else {
-                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                            }
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("🖼️ 相册") },
-                        onClick = {
-                            showMediaMenu = false
-                            galleryLauncher.launch("image/*")
-                        }
-                    )
-                }
-            }
-
-            TextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("输入消息...") },
-                maxLines = 4
-            )
-
-            Spacer(Modifier.width(4.dp))
-
-            if (isStreaming) {
-                IconButton(onClick = { vm.stopGeneration() }) {
-                    Icon(Icons.Default.Stop, contentDescription = "停止")
-                }
-            }
-            IconButton(
-                onClick = {
-                    if (input.isNotBlank() || selectedImageBase64 != null) {
-                        vm.sendMessage(input, selectedImageBase64, selectedImageMime)
-                        input = ""; selectedImageUri = null; selectedImageBase64 = null
+                // Media picker button
+                Box {
+                    IconButton(onClick = { showMediaMenu = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "添加")
                     }
-                },
-                enabled = !isSending
-            ) { Icon(Icons.Default.Send, contentDescription = "发送") }
+                    DropdownMenu(
+                        expanded = showMediaMenu,
+                        onDismissRequest = { showMediaMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("📷 拍照") },
+                            onClick = {
+                                showMediaMenu = false
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                                    == PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    val photoFile = File(context.cacheDir, "cam_${System.currentTimeMillis()}.jpg")
+                                    cameraPhotoUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
+                                    cameraLauncher.launch(cameraPhotoUri!!)
+                                } else {
+                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                }
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("🖼️ 相册") },
+                            onClick = {
+                                showMediaMenu = false
+                                galleryLauncher.launch("image/*")
+                            }
+                        )
+                    }
+                }
+
+                TextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("输入消息...") },
+                    maxLines = 4
+                )
+
+                Spacer(Modifier.width(4.dp))
+
+                if (isStreaming) {
+                    IconButton(onClick = { vm.stopGeneration() }) {
+                        Icon(Icons.Default.Stop, contentDescription = "停止")
+                    }
+                }
+                IconButton(
+                    onClick = {
+                        if (input.isNotBlank() || selectedImageBase64 != null) {
+                            vm.sendMessage(input, selectedImageBase64, selectedImageMime)
+                            input = ""; selectedImageUri = null; selectedImageBase64 = null
+                        }
+                    },
+                    enabled = !isSending
+                ) { Icon(Icons.Default.Send, contentDescription = "发送") }
+            }
         }
+
+        // Snackbar overlay for errors
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
     }
 }
 
