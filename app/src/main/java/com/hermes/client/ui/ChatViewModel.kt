@@ -136,17 +136,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     } catch (e: Exception) {
                         val errorText = if (currentJob?.isCancelled == true) "[已停止]" else "[错误] ${e.message}"
                         dao.update(MessageEntity(id = assistantId, role = "assistant", content = errorText, timestamp = System.currentTimeMillis()))
+                    } finally {
+                        _streamingContent.value = ""
+                        _isStreaming.value = false
+                        _toolRunning.value = false
+                        _toolStatus.value = null
+                        _isSending.value = false
                     }
                 }
             } catch (e: Exception) {
-                // Catch any setup error (e.g. DAO insert) to prevent stuck flags
-                e.printStackTrace()
-            } finally {
+                // Setup error before inner job started — reset flags manually
                 _streamingContent.value = ""
                 _isStreaming.value = false
                 _toolRunning.value = false
                 _toolStatus.value = null
                 _isSending.value = false
+                e.printStackTrace()
             }
         }
     }
