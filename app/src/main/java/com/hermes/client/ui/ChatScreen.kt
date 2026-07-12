@@ -4,23 +4,10 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
-import android.graphics.Matrix
-import android.graphics.Rect
-import android.graphics.YuvImage
 import android.net.Uri
 import android.util.Base64
-import android.view.ViewGroup
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.AspectRatio
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.ImageProxy
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -45,9 +32,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -60,11 +46,7 @@ import com.hermes.client.data.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.nio.ByteBuffer
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 
 @Composable
 fun ChatScreen(vm: ChatViewModel = viewModel()) {
@@ -86,15 +68,41 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     var selectedImageBase64 by remember { mutableStateOf<String?>(null) }
     var selectedImageMime by remember { mutableStateOf("image/jpeg") }
 
-    // In-app camera overlay
-    var showCamera by remember { mutableStateOf(false) }
+    // Camera — uses system camera via TakePicture contract
+    var cameraPhotoUri by remember { mutableStateOf<Uri?>(null) }
 
-    // Camera runtime permission
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success: Boolean ->
+        if (success) {
+            cameraPhotoUri?.let { uri ->
+                selectedImageUri = uri
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val cr = context.contentResolver
+                        val bytes = cr.openInputStream(uri)?.readBytes()
+                        withContext(Dispatchers.Main) {
+                            selectedImageMime = "image/jpeg"
+                            selectedImageBase64 = bytes?.let { b -> Base64.encodeToString(b, Base64.NO_WRAP) }
+                        }
+                    } catch (e: Exception) { e.printStackTrace() }
+                }
+            }
+        }
+    }
+
+    // Camera permission launcher
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) showCamera = true
-        else Toast.makeText(context, "需要相机权限才能拍照", Toast.LENGTH_SHORT).show()
+        if (granted) {
+            // Permission granted — create temp file URI and launch camera
+            val photoFile = File(context.cacheDir, "cam_${System.currentTimeMillis()}.jpg")
+            cameraPhotoUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
+            cameraLauncher.launch(cameraPhotoUri!!)
+        } else {
+            Toast.makeText(context, "需要相机权限才能拍照", Toast.LENGTH_SHORT).show()
+        }
     }
 
     // Gallery
@@ -154,7 +162,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val clean = keyInput.replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+                        val clean = keyInput.replace(Regex("[^a-zA-Z0-9_\\\\-]"), "")
                         if (clean.isNotBlank()) {
                             vm.apiKey = clean
                             showKeyDialog = false
@@ -163,21 +171,6 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                     enabled = keyInput.isNotBlank()
                 ) { Text("确定") }
             }
-        )
-    }
-
-    // CameraX overlay
-    if (showCamera) {
-        CameraCaptureOverlay(
-            onImageCaptured = { bytes ->
-                scope.launch {
-                    selectedImageMime = "image/jpeg"
-                    selectedImageBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    selectedImageUri = null // CameraX doesn't produce a URI
-                }
-                showCamera = false
-            },
-            onClose = { showCamera = false }
         )
     }
 
@@ -272,7 +265,9 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
                                 == PackageManager.PERMISSION_GRANTED
                             ) {
-                                showCamera = true
+                                val photoFile = File(context.cacheDir, "cam_${System.currentTimeMillis()}.jpg")
+                                cameraPhotoUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", photoFile)
+                                cameraLauncher.launch(cameraPhotoUri!!)
                             } else {
                                 cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                             }
@@ -312,171 +307,6 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 },
                 enabled = !isSending
             ) { Icon(Icons.Default.Send, contentDescription = "发送") }
-        }
-    }
-}
-
-@Composable
-fun CameraCaptureOverlay(
-    onImageCaptured: (ByteArray) -> Unit,
-    onClose: () -> Unit
-) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = rememberCoroutineScope()
-    val cacheDir = context.cacheDir
-
-    var errorMsg by remember { mutableStateOf<String?>(null) }
-    var isInitializing by remember { mutableStateOf(true) }
-
-    // CameraX components - created once
-    val imageCapture = remember {
-        ImageCapture.Builder()
-            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-            .build()
-    }
-
-    // Will be set when AndroidView creates the PreviewView
-    var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
-
-    // Initialize camera when previewView is available
-    LaunchedEffect(previewViewRef) {
-        val pv = previewViewRef ?: return@LaunchedEffect
-        try {
-            val cameraProvider = withContext(Dispatchers.IO) {
-                ProcessCameraProvider.getInstance(context).get()
-            }
-            val preview = Preview.Builder()
-                .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-                .build()
-            preview.setSurfaceProvider(pv.surfaceProvider)
-
-            cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(
-                lifecycleOwner,
-                CameraSelector.DEFAULT_BACK_CAMERA,
-                preview,
-                imageCapture
-            )
-            isInitializing = false
-        } catch (e: Exception) {
-            e.printStackTrace()
-            errorMsg = "相机启动失败: ${e.message}"
-            isInitializing = false
-        }
-    }
-
-    // Cleanup
-    DisposableEffect(Unit) {
-        onDispose {
-            // CameraX auto-unbinds via lifecycle
-        }
-    }
-
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // Camera preview
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                PreviewView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
-                    // Signal that the view is ready
-                    post { previewViewRef = this }
-                }
-            },
-            update = { pv ->
-                if (previewViewRef == null) {
-                    pv.post { previewViewRef = pv }
-                }
-            }
-        )
-
-        // Loading / Error overlay
-        if (isInitializing) {
-            CircularProgressIndicator(
-                modifier = Modifier.align(Alignment.Center),
-                color = Color.White
-            )
-        }
-        errorMsg?.let { msg ->
-            Column(
-                modifier = Modifier.align(Alignment.Center).padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(msg, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = onClose) { Text("关闭") }
-            }
-        }
-
-        // Top close button
-        IconButton(
-            onClick = onClose,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(16.dp)
-                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-        ) {
-            Icon(Icons.Default.Close, "关闭", tint = Color.White)
-        }
-
-        // Bottom capture button
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 48.dp)
-        ) {
-            IconButton(
-                onClick = {
-                    if (errorMsg != null) return@IconButton
-
-                    // Save to temp file — avoids manual YUV conversion
-                    val photoFile = File(cacheDir, "cam_${System.currentTimeMillis()}.jpg")
-                    val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
-
-                    imageCapture.takePicture(
-                        outputOptions,
-                        ContextCompat.getMainExecutor(context),
-                        object : ImageCapture.OnImageSavedCallback {
-                            override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                                scope.launch(Dispatchers.IO) {
-                                    try {
-                                        val bytes = photoFile.readBytes()
-                                        photoFile.delete()
-                                        withContext(Dispatchers.Main) {
-                                            onImageCaptured(bytes)
-                                        }
-                                    } catch (e: Exception) {
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, "读取照片失败: ${e.message}", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            }
-
-                            override fun onError(exception: ImageCaptureException) {
-                                Toast.makeText(context, "拍照失败: ${exception.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    )
-                },
-                enabled = !isInitializing,
-                modifier = Modifier
-                    .size(72.dp)
-                    .background(if (isInitializing) Color.Gray else Color.White, CircleShape)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(62.dp)
-                        .background(Color.Transparent, CircleShape)
-                        .border(3.dp, if (isInitializing) Color.DarkGray else Color.Black, CircleShape)
-                )
-            }
         }
     }
 }
