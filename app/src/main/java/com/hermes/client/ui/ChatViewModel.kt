@@ -73,6 +73,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         stopGeneration()
 
+        // --- Slash command handling ---
+        if (text.startsWith("/") && imageBase64 == null) {
+            handleSlashCommand(text)
+            return
+        }
+
         if (!hasApiKey()) {
             _error.value = ChatError.Unauthorized
             return
@@ -189,6 +195,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun stopGeneration() {
         currentJob?.cancel()
         currentResponse?.close()
+    }
+
+    private fun handleSlashCommand(command: String) {
+        when {
+            command == "/reset" || command == "/new" -> {
+                viewModelScope.launch {
+                    repository.clearAllMessages()
+                    _streamingContent.value = ""
+                    _thinkingContent.value = ""
+                    _toolStatus.value = "🔄 会话已重置"
+                    kotlinx.coroutines.delay(1500)
+                    _toolStatus.value = null
+                }
+            }
+            command.startsWith("/") -> {
+                _error.value = ChatError.Network(
+                    "未知命令: $command\n\n支持的命令:\n/reset, /new  — 清空当前对话"
+                )
+            }
+        }
     }
 
     fun clearMessages() {
