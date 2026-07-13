@@ -6,10 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import okhttp3.Response
 import org.json.JSONArray
@@ -17,6 +14,7 @@ import org.json.JSONObject
 import com.hermes.client.data.AppContainer
 import com.hermes.client.data.ChatError
 import com.hermes.client.data.ChatRepository
+import com.hermes.client.data.ConversationEntity
 import com.hermes.client.data.MessageEntity
 import com.hermes.client.data.SseParser
 
@@ -26,21 +24,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     internal var apiKey: String
         get() {
             val raw = prefs.getString("api_key", "") ?: ""
-            return raw.replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+            return raw.trim()
         }
         set(value) {
-            val clean = value.replace(Regex("[^a-zA-Z0-9_\\-]"), "")
-            prefs.edit().putString("api_key", clean).apply()
+            prefs.edit().putString("api_key", value.trim()).apply()
         }
 
     private val repository: ChatRepository by lazy {
         AppContainer.getChatRepository(application, "http://127.0.0.1:8642", apiKey)
     }
 
-    fun hasApiKey(): Boolean = apiKey.isNotBlank()
+    // ── Conversations ──
 
-    val messages: StateFlow<List<MessageEntity>> = repository.allMessages
+    val conversations: StateFlow<List<ConversationEntity>> = repository.allConversations
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _currentConversationId = MutableStateFlow("")
+    val currentConversationId: StateFlow<String> = _currentConversationId
+
+    // Messages scoped to current conversation
+    val messages: StateFlow<List<MessageEntity>> = _currentConversationId
+        .flatMapLatest { id ->
+            if (id.isBlank()) flowOf(emptyList())
+            else repository.getMessages(id)
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    // ── Streaming state ──
 
     private val _streamingContent = MutableStateFlow("")
     val streamingContent: StateFlow<String> = _streamingContent
@@ -66,6 +76,53 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var currentJob: Job? = null
     private var currentResponse: Response? = null
 
+    init {
+        viewModelScope.launch {
+            // Pick latest conversation or create one
+            val existing = repository.getConversationsOnce()
+            val conv = existing.firstOrNull() ?: repository.createConversation()
+            _currentConversationId.value = conv.uuid
+        }
+    }
+
+    // ── Conversation management ──
+
+    fun switchConversation(uuid: String) {
+        if (uuid != _currentConversationId.value) {
+            _currentConversationId.value = uuid
+        }
+    }
+
+    fun newConversation() {
+        viewModelScope.launch {
+            val conv = repository.createConversation()
+            _currentConversationId.value = conv.uuid
+        }
+    }
+
+    fun deleteConversation(uuid: String) {
+        viewModelScope.launch {
+            repository.deleteConversation(uuid)
+            if (_currentConversationId.value == uuid) {
+                val remaining = repository.getConversationsOnce()
+                val next = remaining.firstOrNull() ?: repository.createConversation()
+                _currentConversationId.value = next.uuid
+            }
+        }
+    }
+
+    fun renameConversation(uuid: String, title: String) {
+        viewModelScope.launch {
+            repository.getConversation(uuid)?.let { conv ->
+                repository.updateConversation(conv.copy(title = title))
+            }
+        }
+    }
+
+    // ── Messaging ──
+
+    fun hasApiKey(): Boolean = apiKey.isNotBlank()
+
     fun sendMessage(
         text: String,
         imageBase64: String? = null,
@@ -73,7 +130,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         stopGeneration()
 
-        // --- Slash command handling ---
+        // Slash commands (local-only)
         if (text.startsWith("/") && imageBase64 == null) {
             handleSlashCommand(text)
             return
@@ -84,12 +141,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        val convId = _currentConversationId.value
+        if (convId.isBlank()) return
+
         _isSending.value = true
         viewModelScope.launch {
             try {
-                val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
-                repository.saveMessage(MessageEntity(role = "user", content = displayText, imageBase64 = imageBase64, timestamp = System.currentTimeMillis()))
+                // Build history from DB first
+                val historyJson = buildHistoryJson(convId, text, imageBase64, mimeType)
 
+                // Save user message after building history (avoids duplication)
+                val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
+                repository.saveMessage(
+                    MessageEntity(
+                        conversationId = convId,
+                        role = "user",
+                        content = displayText,
+                        imageBase64 = imageBase64,
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+
+                // Auto-title from first user message
+                val msgs = repository.getMessagesOnce(convId)
+                if (msgs.size == 1) {
+                    val title = displayText.take(40).replace("\n", " ")
+                    repository.getConversation(convId)?.let { conv ->
+                        repository.updateConversation(conv.copy(title = title))
+                    }
+                }
+
+                // Start streaming
                 _isStreaming.value = true
                 _streamingContent.value = ""
                 _thinkingContent.value = ""
@@ -98,7 +180,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                 currentJob = launch(Dispatchers.IO) {
                     try {
-                        val historyJson = buildHistoryJson(text, imageBase64, mimeType)
                         val response = repository.streamChat(historyJson)
                         currentResponse = response
 
@@ -143,7 +224,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 scope.launch {
                                     val finalContent = contentBuffer.toString()
                                     if (finalContent.isNotBlank()) {
-                                        repository.saveMessage(MessageEntity(role = "assistant", content = finalContent, timestamp = System.currentTimeMillis()))
+                                        repository.saveMessage(
+                                            MessageEntity(
+                                                conversationId = convId,
+                                                role = "assistant",
+                                                content = finalContent,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                        )
                                     }
                                     _streamingContent.value = ""
                                 }
@@ -161,15 +249,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 scope.launch {
                                     if (finalMsg.isNotBlank() && !finalMsg.startsWith("[")) {
-                                        repository.saveMessage(MessageEntity(role = "assistant", content = finalMsg, timestamp = System.currentTimeMillis()))
+                                        repository.saveMessage(
+                                            MessageEntity(
+                                                conversationId = convId,
+                                                role = "assistant",
+                                                content = finalMsg,
+                                                timestamp = System.currentTimeMillis()
+                                            )
+                                        )
                                     }
                                 }
                             }
                         )
                     } catch (e: Exception) {
                         if (currentJob?.isCancelled != true) {
-                            val errorText = "[错误] ${e.message}"
-                            _streamingContent.value = errorText
+                            _streamingContent.value = "[错误] ${e.message}"
                             _error.value = ChatError.Network(e.message ?: "未知错误")
                         }
                     } finally {
@@ -200,25 +294,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleSlashCommand(command: String) {
         when {
             command == "/reset" || command == "/new" -> {
+                newConversation()
                 viewModelScope.launch {
-                    repository.clearAllMessages()
-                    _streamingContent.value = ""
-                    _thinkingContent.value = ""
-                    _toolStatus.value = "🔄 会话已重置"
+                    _toolStatus.value = "🔄 已创建新会话"
                     kotlinx.coroutines.delay(1500)
                     _toolStatus.value = null
                 }
             }
             command.startsWith("/") -> {
                 _error.value = ChatError.Network(
-                    "未知命令: $command\n\n支持的命令:\n/reset, /new  — 清空当前对话"
+                    "未知命令: $command\n\n支持的命令:\n/reset, /new  — 创建新对话"
                 )
             }
         }
     }
 
     fun clearMessages() {
-        viewModelScope.launch { repository.clearAllMessages() }
+        val convId = _currentConversationId.value
+        if (convId.isNotBlank()) {
+            viewModelScope.launch {
+                repository.clearConversation(convId)
+            }
+        }
     }
 
     fun deleteMessage(msg: MessageEntity) {
@@ -230,13 +327,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun buildHistoryJson(
+        conversationId: String,
         currentText: String,
         currentImageBase64: String?,
         currentMimeType: String
     ): String {
-        val messages = repository.allMessages
+        val history = repository.getMessagesOnce(conversationId)
         val array = JSONArray()
-        for (msg in messages) {
+        for (msg in history) {
             if (msg.content.isBlank() && msg.imageBase64 == null) continue
             if (msg.content.startsWith("[错误]") || msg.content.startsWith("[已停止]")) continue
             if (msg.content.startsWith("[")) continue
@@ -247,7 +345,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 content.put(JSONObject().apply {
                     put("type", "image_url")
                     put("image_url", JSONObject().apply {
-                        put("url", "data:$mimeType;base64,${msg.imageBase64}")
+                        // Use stored mime type once we persist it; fallback to user's current for now
+                        put("url", "data:$currentMimeType;base64,${msg.imageBase64}")
                     })
                 })
                 if (msg.content.isNotBlank()) {
@@ -262,7 +361,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             array.put(obj)
         }
-        // Append current user message
+        // Append current user message (not yet in DB)
         val cur = JSONObject()
         cur.put("role", "user")
         if (currentImageBase64 != null) {

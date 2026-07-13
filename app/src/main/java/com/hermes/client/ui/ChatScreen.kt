@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import coil.compose.AsyncImage
 import com.hermes.client.data.ChatError
+import com.hermes.client.data.ConversationEntity
 import com.hermes.client.data.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -211,6 +212,104 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
         )
     }
 
+    // ── Conversation list dialog ──
+    if (showConversations) {
+        AlertDialog(
+            onDismissRequest = { showConversations = false },
+            title = { Text("对话列表") },
+            text = {
+                LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                    item {
+                        TextButton(
+                            onClick = {
+                                vm.newConversation()
+                                showConversations = false
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(4.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("新建对话")
+                        }
+                        HorizontalDivider()
+                    }
+                    items(conversations, key = { it.id }) { conv ->
+                        Surface(
+                            onClick = {
+                                vm.switchConversation(conv.uuid)
+                                showConversations = false
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (conv.uuid == currentConvId)
+                                MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surface
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = conv.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = formatTime(conv.updatedAt),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (conversations.size > 1) {
+                                    IconButton(
+                                        onClick = {
+                                            vm.deleteConversation(conv.uuid)
+                                        }
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "删除",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showConversations = false }) {
+                    Text("关闭")
+                }
+            }
+        )
+    }
+
+    // ── Clear confirmation ──
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text("清空当前对话") },
+            text = { Text("确定要清空当前对话的所有消息吗？此操作不可撤销。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.clearMessages()
+                        showClearConfirm = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("清空") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) { Text("取消") }
+            }
+        )
+    }
+
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(vm.error) {
@@ -229,24 +328,52 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
         }
     }
 
+    var conversations by vm.conversations.collectAsState()
+    var currentConvId by vm.currentConversationId.collectAsState()
+    var showConversations by remember { mutableStateOf(false) }
+    var showClearConfirm by remember { mutableStateOf(false) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
-            // Top bar with clear button and settings
+            // Top bar with conversation switcher and settings
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { showKeyDialog = true; keyInput = vm.apiKey }) {
-                    Icon(Icons.Default.Settings, contentDescription = "设置", modifier = Modifier.size(20.dp))
+                IconButton(onClick = { showConversations = true }) {
+                    Icon(Icons.Default.Menu, contentDescription = "会话列表", modifier = Modifier.size(20.dp))
                 }
-                if (messages.isNotEmpty()) {
-                    TextButton(
-                        onClick = { vm.clearMessages() },
-                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = "清空", modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("清空记录", style = MaterialTheme.typography.bodySmall)
+
+                // Current conversation title
+                val currentConv = conversations.find { it.uuid == currentConvId }
+                TextButton(
+                    onClick = { showConversations = true },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onSurface
+                    )
+                ) {
+                    Text(
+                        text = currentConv?.title ?: "新对话",
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1
+                    )
+                    Icon(Icons.Default.UnfoldMore, contentDescription = null, modifier = Modifier.size(16.dp))
+                }
+
+                Row {
+                    if (messages.isNotEmpty()) {
+                        IconButton(
+                            onClick = { showClearConfirm = true },
+                            colors = IconButtonDefaults.iconButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "清空", modifier = Modifier.size(18.dp))
+                        }
+                    }
+                    IconButton(onClick = { showKeyDialog = true; keyInput = vm.apiKey }) {
+                        Icon(Icons.Default.Settings, contentDescription = "设置", modifier = Modifier.size(20.dp))
                     }
                 }
             }
@@ -554,4 +681,9 @@ fun rememberBase64Bitmap(base64: String): Bitmap? {
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         } catch (e: Exception) { null }
     }
+}
+
+private fun formatTime(timestamp: Long): String {
+    val sdf = java.text.SimpleDateFormat("MM/dd HH:mm", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(timestamp))
 }

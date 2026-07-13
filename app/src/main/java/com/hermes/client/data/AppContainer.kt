@@ -17,12 +17,17 @@ object AppContainer {
         }
     }
 
+    fun getConversationDao(context: Context): ConversationDao {
+        return getDatabase(context).conversationDao()
+    }
+
     fun getMessageDao(context: Context): MessageDao {
         return getDatabase(context).messageDao()
     }
 
     fun getChatRepository(context: Context, baseUrl: String, apiKey: String): ChatRepository {
         return ChatRepository(
+            conversationDao = getConversationDao(context),
             messageDao = getMessageDao(context),
             hermesClient = HermesClient(baseUrl, apiKey)
         )

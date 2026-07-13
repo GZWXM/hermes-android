@@ -22,7 +22,7 @@ jobs:
 
 
       - name: Build signed APK
-        run: gradle assembleDebug
+        run: ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
