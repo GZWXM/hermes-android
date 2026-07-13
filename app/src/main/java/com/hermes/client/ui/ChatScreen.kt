@@ -66,6 +66,13 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     val toolStatus by vm.toolStatus.collectAsState()
     val toolRunning by vm.toolRunning.collectAsState()
 
+    // Conversation state
+    val conversations by vm.conversations.collectAsState()
+    val currentConvId by vm.currentConversationId.collectAsState()
+    val error by vm.error.collectAsState()
+    var showConversations by remember { mutableStateOf(false) }
+    var showClearConfirm by remember { mutableStateOf(false) }
+
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -312,14 +319,14 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
 
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(vm.error) {
-        vm.error?.let { error ->
-            val msg = when (error) {
-                is ChatError.Network -> "网络错误: ${error.message}"
+    LaunchedEffect(error) {
+        error?.let { e ->
+            val msg = when (e) {
+                is ChatError.Network -> "网络错误: ${e.message}"
                 is ChatError.Unauthorized -> "请先配置 API Key"
-                is ChatError.Server -> "服务器错误 (${error.code}): ${error.message}"
+                is ChatError.Server -> "服务器错误 (${e.code}): ${e.message}"
                 is ChatError.Cancelled -> null
-                is ChatError.Unknown -> "未知错误: ${error.message}"
+                is ChatError.Unknown -> "未知错误: ${e.message}"
             }
             if (msg != null) {
                 snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Short)
@@ -327,11 +334,6 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             vm.clearError()
         }
     }
-
-    var conversations by vm.conversations.collectAsState()
-    var currentConvId by vm.currentConversationId.collectAsState()
-    var showConversations by remember { mutableStateOf(false) }
-    var showClearConfirm by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
