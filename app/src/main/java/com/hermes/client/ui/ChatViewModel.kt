@@ -126,12 +126,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun sendMessage(
         text: String,
         imageBase64: String? = null,
-        mimeType: String = "image/jpeg"
+        mimeType: String = "image/jpeg",
+        fileBase64: String? = null,
+        fileName: String? = null
     ) {
         stopGeneration()
 
         // Slash commands (local-only)
-        if (text.startsWith("/") && imageBase64 == null) {
+        if (text.startsWith("/") && imageBase64 == null && fileBase64 == null) {
             handleSlashCommand(text)
             return
         }
@@ -148,16 +150,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 // Build history from DB first
-                val historyJson = buildHistoryJson(convId, text, imageBase64, mimeType)
+                val historyJson = buildHistoryJson(convId, text, imageBase64, mimeType, fileBase64, fileName)
 
                 // Save user message after building history (avoids duplication)
-                val displayText = if (imageBase64 != null && text.isBlank()) "[图片]" else text
+                val displayText = if (imageBase64 != null && text.isBlank()) "[图片]"
+                    else if (fileBase64 != null && text.isBlank()) "[文件] $fileName"
+                    else text
                 repository.saveMessage(
                     MessageEntity(
                         conversationId = convId,
                         role = "user",
                         content = displayText,
                         imageBase64 = imageBase64,
+                        fileBase64 = fileBase64,
+                        fileName = fileName,
                         timestamp = System.currentTimeMillis()
                     )
                 )
@@ -334,12 +340,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         conversationId: String,
         currentText: String,
         currentImageBase64: String?,
-        currentMimeType: String
+        currentMimeType: String,
+        currentFileBase64: String? = null,
+        currentFileName: String? = null
     ): String {
         val history = repository.getMessagesOnce(conversationId)
         val array = JSONArray()
         for (msg in history) {
-            if (msg.content.isBlank() && msg.imageBase64 == null) continue
+            if (msg.content.isBlank() && msg.imageBase64 == null && msg.fileBase64 == null) continue
             if (msg.content.startsWith("[错误]") || msg.content.startsWith("[已停止]")) continue
             if (msg.content.startsWith("[")) continue
             val obj = JSONObject()
@@ -360,6 +368,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     })
                 }
                 obj.put("content", content)
+            } else if (msg.fileBase64 != null) {
+                obj.put("file_base64", msg.fileBase64)
+                obj.put("file_name", msg.fileName ?: "file")
+                obj.put("content", msg.content)
             } else {
                 obj.put("content", msg.content)
             }
@@ -368,7 +380,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Append current user message (not yet in DB)
         val cur = JSONObject()
         cur.put("role", "user")
-        if (currentImageBase64 != null) {
+        if (currentFileBase64 != null) {
+            cur.put("file_base64", currentFileBase64)
+            cur.put("file_name", currentFileName ?: "file")
+            cur.put("content", currentText)
+        } else if (currentImageBase64 != null) {
             val content = JSONArray()
             content.put(JSONObject().apply {
                 put("type", "image_url")

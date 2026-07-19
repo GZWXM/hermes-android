@@ -95,6 +95,9 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
     var selectedImageUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var selectedImageBase64 by remember { mutableStateOf<String?>(null) }
     var selectedImageMime by remember { mutableStateOf("image/jpeg") }
+    var selectedFileUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var selectedFileBase64 by remember { mutableStateOf<String?>(null) }
+    var selectedFileName by remember { mutableStateOf<String?>(null) }
 
     // Camera — uses system camera via TakePicture contract
     var cameraPhotoUri by remember { mutableStateOf<Uri?>(null) }
@@ -147,6 +150,30 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                     withContext(Dispatchers.Main) {
                         selectedImageMime = mime
                         selectedImageBase64 = bytes?.let { b -> Base64.encodeToString(b, Base64.NO_WRAP) }
+                    }
+                } catch (e: Exception) { e.printStackTrace() }
+            }
+        }
+    }
+
+    // File picker
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            selectedFileUri = it
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val cr = context.contentResolver
+                    val name = cr.query(it, null, null, null, null)?.use { cursor ->
+                        val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (nameIdx >= 0 && cursor.moveToFirst()) cursor.getString(nameIdx) else "file"
+                    } ?: "file"
+                    val bytes = cr.openInputStream(it)?.readBytes()
+                    withContext(Dispatchers.Main) {
+                        selectedFileName = name
+                        selectedFileBase64 = bytes?.let { b -> Base64.encodeToString(b, Base64.NO_WRAP) }
+                        Toast.makeText(context, "已选择: $name (${bytes?.size?.div(1024) ?: 0}KB)", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) { e.printStackTrace() }
             }
@@ -506,6 +533,13 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                                 galleryLauncher.launch("image/*")
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text("📎 文件") },
+                            onClick = {
+                                showMediaMenu = false
+                                filePickerLauncher.launch("*/*")
+                            }
+                        )
                     }
                 }
 
@@ -526,9 +560,10 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 }
                 IconButton(
                     onClick = {
-                        if (input.isNotBlank() || selectedImageBase64 != null) {
-                            vm.sendMessage(input, selectedImageBase64, selectedImageMime)
+                        if (input.isNotBlank() || selectedImageBase64 != null || selectedFileBase64 != null) {
+                            vm.sendMessage(input, selectedImageBase64, selectedImageMime, selectedFileBase64, selectedFileName)
                             input = ""; selectedImageUri = null; selectedImageBase64 = null
+                            selectedFileUri = null; selectedFileBase64 = null; selectedFileName = null
                         }
                     },
                     enabled = !isSending
@@ -648,6 +683,23 @@ fun MessageBubble(msg: MessageEntity, onDelete: () -> Unit = {}) {
                             Image(it.asImageBitmap(), "图片", Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.FillWidth)
                         }
                         if (hasText) Spacer(Modifier.height(6.dp))
+                    }
+                    if (!isUser && msg.fileBase64 != null) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
+                        ) {
+                            Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("📎", fontSize = MaterialTheme.typography.titleMedium.fontSize)
+                                Spacer(Modifier.width(8.dp))
+                                Column {
+                                    Text(msg.fileName ?: "文件", style = MaterialTheme.typography.bodyMedium)
+                                    Text("已接收", style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
                     }
                     if (hasText) {
                         if (!isUser && msg.thinkingContent != null) {
