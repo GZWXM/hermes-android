@@ -649,7 +649,37 @@ fun MessageBubble(msg: MessageEntity, onDelete: () -> Unit = {}) {
                         }
                         if (hasText) Spacer(Modifier.height(6.dp))
                     }
-                    if (hasText) MarkdownContent(text = msg.content, isUser = isUser)
+                    if (hasText) {
+                        if (!isUser && msg.thinkingContent != null) {
+                            var thinkingExpanded by remember { mutableStateOf(false) }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSystemInDarkTheme()) Color(0xFF1A2744) else Color(0xFFF0F5FF),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    TextButton(
+                                        onClick = { thinkingExpanded = !thinkingExpanded },
+                                        contentPadding = PaddingValues(0.dp)
+                                    ) {
+                                        Text(
+                                            if (thinkingExpanded) "🧠 思维链 ▼" else "🧠 思维链 ▶",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isSystemInDarkTheme()) Color(0xFF8AB4F8) else Color(0xFF1A73E8)
+                                        )
+                                    }
+                                    if (thinkingExpanded) {
+                                        Text(
+                                            text = msg.thinkingContent,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        MarkdownContent(text = msg.content, isUser = isUser)
+                    }
                 }
             }
             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {

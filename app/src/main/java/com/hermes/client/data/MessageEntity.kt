@@ -13,5 +13,6 @@ data class MessageEntity(
     val role: String,
     val content: String,
     val imageBase64: String? = null,
+    val thinkingContent: String? = null,
     val timestamp: Long
 )

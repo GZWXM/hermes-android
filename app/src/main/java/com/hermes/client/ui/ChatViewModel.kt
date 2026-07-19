@@ -225,12 +225,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             onDone = {
                                 scope.launch {
                                     val finalContent = contentBuffer.toString()
+                                    val finalThinking = reasoningBuffer.toString()
                                     if (finalContent.isNotBlank()) {
                                         repository.saveMessage(
                                             MessageEntity(
                                                 conversationId = convId,
                                                 role = "assistant",
                                                 content = finalContent,
+                                                thinkingContent = finalThinking.ifBlank { null },
                                                 timestamp = System.currentTimeMillis()
                                             )
                                         )
