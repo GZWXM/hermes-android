@@ -200,6 +200,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
 
                         val contentBuffer = StringBuilder()
+                        val reasoningBuffer = StringBuilder()
                         val scope = this
 
                         SseParser.parse(
@@ -209,7 +210,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 _streamingContent.value = contentBuffer.toString()
                             },
                             onReasoning = { text ->
-                                _thinkingContent.value = text
+                                reasoningBuffer.append(text)
+                                _thinkingContent.value = reasoningBuffer.toString()
                             },
                             onToolCall = { progress ->
                                 if (progress.status == "running") {
